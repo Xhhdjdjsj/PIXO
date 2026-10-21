@@ -382,83 +382,6 @@ function fitFrameBounds(objects: CanvasObject[]) {
   })
 }
 
-function regroupImportedSvgParts(objects: CanvasObject[], assets: Asset[]) {
-  const addedGroups: CanvasObject[] = []
-  const childParentIds = new Map<string, string>()
-  const removableRootIds = new Set<string>()
-  const rootParents = new Map<string, string | undefined>()
-
-  for (const root of objects.filter((item) => item.isFrame && item.category === 'Group' && !item.isGroup)) {
-    const children = objects.filter((item) => item.frameId === root.objectId && !item.isFrame)
-    const source = assets.find((asset) => asset.id === root.id || asset.source === root.source)
-    if (!source || children.length < 2) continue
-
-    const logicalGroups = getSvgStructure(source.markup).filter(({ tag }) => tag === 'g')
-    if (logicalGroups.length < 2) continue
-    const sourceDocument = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${source.markup}</svg>`, 'image/svg+xml')
-    const groupDetails = logicalGroups.flatMap((node, index) => {
-      let element: Element = sourceDocument.documentElement
-      for (const childIndex of node.path) element = element.children.item(childIndex) ?? element
-      const svgId = element.getAttribute('id')
-      return svgId ? [{ svgId, label: /^obj-[\w-]+$/.test(node.label) ? `Group ${index + 1}` : node.label }] : []
-    })
-    if (groupDetails.length < 2) continue
-    const groupBySvgId = new Map(groupDetails.map((group) => [group.svgId, group.label]))
-    const groupedChildren = new Map<string, CanvasObject[]>()
-
-    for (const child of children) {
-      const parsed = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${child.markup}</svg>`, 'image/svg+xml')
-      const extracted = Array.from(parsed.documentElement.children).find((element) => !['defs', 'title', 'desc', 'metadata', 'style', 'mask', 'clipPath', 'filter', 'pattern', 'linearGradient', 'radialGradient', 'marker'].includes(element.localName))
-      const svgGroupId = extracted?.localName === 'g' ? extracted.getAttribute('id') : null
-      if (!svgGroupId || !groupBySvgId.has(svgGroupId)) continue
-      groupedChildren.set(svgGroupId, [...(groupedChildren.get(svgGroupId) ?? []), child])
-    }
-
-    if (groupedChildren.size < 2) continue
-    const groupIds = new Set<string>()
-    for (const group of groupDetails) {
-      const childrenInGroup = groupedChildren.get(group.svgId)
-      if (!childrenInGroup?.length) continue
-      const bounds = getObjectBounds(childrenInGroup)
-      if (!bounds) continue
-      const groupId = makeId()
-      groupIds.add(groupId)
-      addedGroups.push({
-        ...root,
-        id: groupId,
-        objectId: groupId,
-        name: `${root.name.replace(/ group$/i, '')} · ${group.label}`,
-        category: 'Group',
-        ...bounds,
-        markup: '',
-        isFrame: true,
-        isGroup: true,
-        frameId: root.objectId,
-      })
-      childrenInGroup.forEach((child) => childParentIds.set(child.objectId, groupId))
-    }
-    if (children.every((child) => childParentIds.has(child.objectId))) {
-      removableRootIds.add(root.objectId)
-      rootParents.set(root.objectId, root.frameId)
-      for (const group of addedGroups) if (groupIds.has(group.objectId)) group.frameId = root.frameId
-    } else rootParents.set(root.objectId, root.frameId)
-  }
-
-  if (!addedGroups.length) return objects
-  const nextObjects = objects.flatMap((item) => {
-    const frameId = childParentIds.get(item.objectId)
-    if (removableRootIds.has(item.objectId)) return []
-    if (frameId) return [{ ...item, frameId }]
-    return [item]
-  })
-  const migrated = [...nextObjects, ...addedGroups].map((item) => removableRootIds.has(item.frameId ?? '')
-    ? { ...item, frameId: rootParents.get(item.frameId!) }
-    : item)
-  const frames = migrated.filter((item) => item.isFrame)
-  const contents = migrated.filter((item) => !item.isFrame)
-  return fitFrameBounds([...frames, ...contents])
-}
-
 function getFrameDescendants(objects: CanvasObject[], frameId: string): CanvasObject[] {
   return objects.flatMap((item) => item.frameId === frameId
     ? [item, ...(item.isFrame ? getFrameDescendants(objects, item.objectId) : [])]
@@ -496,19 +419,34 @@ function isObjectEffectivelyLocked(objects: CanvasObject[], item: CanvasObject) 
 }
 
 function flattenImportedRootFrames(objects: CanvasObject[], assets: Asset[]) {
-  const removable = new Map<string, string | undefined>()
+  const removable = new Set<string>()
+  const reparented = new Map<string, string | undefined>()
   for (const root of objects.filter((item) => item.isFrame && item.category === 'Group')) {
-    const source = assets.find((asset) => asset.source === root.source)
-    if (!source || root.name !== `${source.name} group`) continue
+    const source = assets.find((asset) => asset.source === root.source && root.name === `${asset.name} group`)
+    if (!source) continue
+    const descendants = getFrameDescendants(objects, root.objectId)
+    const artwork = descendants.filter((item) => !item.isFrame)
+    const isImportedPartsGroup = artwork.length >= 2 && artwork.every((item) =>
+      item.id === source.id && item.source === source.source && item.name.startsWith(`${source.name} · `),
+    )
+    if (isImportedPartsGroup) {
+      descendants.filter((item) => item.isFrame).forEach((item) => removable.add(item.objectId))
+      removable.add(root.objectId)
+      artwork.forEach((item) => reparented.set(item.objectId, root.frameId))
+      continue
+    }
     const children = objects.filter((item) => item.frameId === root.objectId)
     const groups = children.filter((item) => item.isFrame && item.isGroup)
-    if (groups.length >= 2 && children.every((item) => item.isFrame && item.isGroup)) removable.set(root.objectId, root.frameId)
+    if (groups.length >= 2 && children.every((item) => item.isFrame && item.isGroup)) {
+      removable.add(root.objectId)
+      children.forEach((item) => reparented.set(item.objectId, root.frameId))
+    }
   }
   if (!removable.size) return objects
   return objects.flatMap((item) => {
     if (removable.has(item.objectId)) return []
-    const parentId = item.frameId
-    return [parentId && removable.has(parentId) ? { ...item, frameId: removable.get(parentId) } : item]
+    if (reparented.has(item.objectId)) return [{ ...item, frameId: reparented.get(item.objectId) }]
+    return [item]
   })
 }
 
@@ -1025,8 +963,7 @@ function App() {
           const sourceAsset = nextAssets.find((asset) => asset.id === item.id && asset.source === item.source)
           if (!sourceAsset || !canAutoSeparateImportedSvg(sourceAsset) || item.name !== sourceAsset.name) return [item]
           const separated = buildSvgGroupParts(item)
-          const grouped = separated ? createSvgPartsGroup(item, separated.parts) : null
-          return grouped ? [grouped.group, ...grouped.parts] : [item]
+          return separated ? separated.parts : [item]
         })
         const viewportObjects = sourceObjects.map((item) => {
           if (item.isFrame || getAssetFileType(item.source) !== 'SVG') return item
@@ -1057,7 +994,7 @@ function App() {
         }
         const visibleFittedObjects = fittedObjects.filter((item) => item.isFrame || !item.contentBoundsEmpty || !item.frameId)
         return putFrameHitTargetsBehindContents(
-          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(visibleFittedObjects, nextAssets), nextAssets)),
+          fitFrameBounds(flattenImportedRootFrames(visibleFittedObjects, nextAssets)),
         )
       }
       const activeProjectData = projectSource.find((project) => project.id === nextActiveId)
@@ -1845,9 +1782,15 @@ function App() {
   }
 
   async function addAsset(asset: Asset, at?: { x: number; y: number }) {
-    const scale = Math.min(290 / asset.width, 290 / asset.height)
-    const width = asset.width * scale
-    const height = asset.height * scale
+    const assetWidth = Number.isFinite(asset.width) && asset.width > 0 ? asset.width : 290
+    const assetHeight = Number.isFinite(asset.height) && asset.height > 0 ? asset.height : 290
+    const naturalScale = Math.max(1, 290 / Math.max(assetWidth, assetHeight))
+    const maxCanvasWidth = Math.max(290, canvasWidth * 0.85)
+    const maxCanvasHeight = Math.max(290, canvasHeight * 0.85)
+    const fitScale = Math.min(1, maxCanvasWidth / (assetWidth * naturalScale), maxCanvasHeight / (assetHeight * naturalScale))
+    const scale = naturalScale * fitScale
+    const width = assetWidth * scale
+    const height = assetHeight * scale
     const next: CanvasObject = {
       ...asset, objectId: makeId(), x: at?.x ?? canvasWidth / 2 - width / 2, y: at?.y ?? canvasHeight / 2 - height / 2,
       width, height, rotation: 0, opacity: 1, visible: true, locked: false,
@@ -1860,14 +1803,14 @@ function App() {
       const fittedParts = separated
         ? await Promise.all(separated.parts.map((part) => fitSvgObjectToVisibleArtwork(part, fitBackground)))
         : []
-      const grouped = separated ? createSvgPartsGroup(fitted, fittedParts) : null
-      if (grouped) {
-        commit([...objectsRef.current, grouped.group, ...grouped.parts])
-        setSelectedIds([grouped.group.objectId])
+      const visibleParts = fittedParts.filter((part) => !part.contentBoundsEmpty)
+      if (visibleParts.length >= 2) {
+        commit([...objectsRef.current, ...visibleParts])
+        setSelectedIds([visibleParts[0].objectId])
         setActiveTool('Select')
-        setToast(`${asset.name} added with ${grouped.parts.length} movable objects`)
+        setToast(`${asset.name} added as ${visibleParts.length} objects`)
         if (window.matchMedia('(max-width: 680px)').matches) setMobilePanel(null)
-        return grouped.group
+        return visibleParts[0]
       }
     }
     commit([...objectsRef.current, fitted])
@@ -2507,13 +2450,9 @@ function App() {
       const currentIndex = overlapStack.findIndex((candidate) => candidate.objectId === item.objectId)
       dragItem = overlapStack[currentIndex + 1] ?? (currentIndex === -1 ? overlapStack[0] : undefined) ?? item
     }
-    const frameAncestors = getFrameAncestors(objects, dragItem)
-    const moveIndividual = event.altKey && mode === 'move'
-    const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId) && !ancestor.isGroup)
-    const dragFrameAncestor = selectedFrameAncestor
     if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
     event.stopPropagation()
-    const clickedSelection = selectedIds.includes(dragItem.objectId) || Boolean(dragFrameAncestor)
+    const clickedSelection = selectedIds.includes(dragItem.objectId)
     if (!event.shiftKey && !clickedSelection) setSelectedIds([dragItem.objectId])
     if (event.shiftKey) {
       setSelectedIds((ids) => ids.includes(dragItem.objectId) ? ids.filter((id) => id !== dragItem.objectId) : [...ids, dragItem.objectId])
@@ -2524,10 +2463,8 @@ function App() {
     point.x = event.clientX
     point.y = event.clientY
     const local = point.matrixTransform(canvasRef.current.getScreenCTM()?.inverse())
-    // A click on a group child selects that child; selected frame containers still drag as a unit.
-    const movingSelection = dragFrameAncestor
-      ? [dragFrameAncestor]
-      : clickedSelection ? selected : [dragItem]
+    // Dragging artwork moves that object; dragging the selection outline moves the whole selection.
+    const movingSelection = clickedSelection ? selected : [dragItem]
     const dragItems = movingSelection.flatMap((selectedItem) => selectedItem.isFrame
       ? [selectedItem, ...getFrameDescendants(objects, selectedItem.objectId)]
       : [selectedItem])
@@ -2923,7 +2860,7 @@ function App() {
             </svg>
             {(selected.length > 1 || selected.some((item) => item.isFrame) || selectionRect) && <svg className="selection-overlay" viewBox={viewBox}>
               {(selected.length > 1 || selected.some((item) => item.isFrame)) && selectedBounds && <g className="selection-box">
-                <rect x={selectedBounds.x} y={selectedBounds.y} width={selectedBounds.width} height={selectedBounds.height} fill="none" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+                <rect x={selectedBounds.x} y={selectedBounds.y} width={selectedBounds.width} height={selectedBounds.height} fill="none" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="stroke" onPointerDown={(event) => { const dragTarget = selected.find((item) => !isObjectEffectivelyLocked(objects, item)); if (dragTarget) startDrag(event, dragTarget) }} />
                 {[[selectedBounds.x, selectedBounds.y, 'nw'], [selectedBounds.x + selectedBounds.width, selectedBounds.y, 'ne'], [selectedBounds.x, selectedBounds.y + selectedBounds.height, 'sw'], [selectedBounds.x + selectedBounds.width, selectedBounds.y + selectedBounds.height, 'se']].map(([x, y, handle]) => <rect key={String(handle)} className={`resize-handle handle-${handle}`} x={Number(x) - 4} y={Number(y) - 4} width={8} height={8} rx={1} fill="#fff" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="all" onPointerDown={(event) => { if (selected[0]) startDrag(event, selected[0], 'resize', String(handle)) }} />)}
               </g>}
               {selectionRect && <rect className="frame-preview" x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} pointerEvents="none" />}
