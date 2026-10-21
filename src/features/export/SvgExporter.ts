@@ -55,10 +55,14 @@ export function serializeComposition(objects: CanvasObject[], transparentBackgro
   const document = window.document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const root = document.documentElement
   root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  root.setAttribute('width', String(width))
-  root.setAttribute('height', String(height))
+  // Let standalone SVG previews use the available window instead of leaving
+  // unpainted page space beside the fixed-size composition.
+  root.setAttribute('width', '100%')
+  root.setAttribute('height', '100%')
+  root.setAttribute('preserveAspectRatio', 'xMidYMid meet')
   root.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${width} ${height}`)
   if (!transparentBackground) {
+    root.setAttribute('style', `background-color: ${backgroundColor}`)
     const background = document.createElementNS(root.namespaceURI, 'rect')
     background.setAttribute('x', String(viewBoxX))
     background.setAttribute('y', String(viewBoxY))

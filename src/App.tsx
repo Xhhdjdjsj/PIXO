@@ -1797,7 +1797,10 @@ function App() {
       proportionsLocked: true,
     }
     const fitBackground = canvasBackground
-    const fitted = await fitSvgObjectToVisibleArtwork(next, fitBackground)
+    const fittedArtwork = await fitSvgObjectToVisibleArtwork(next, fitBackground)
+    const fitted = at
+      ? { ...fittedArtwork, x: at.x - fittedArtwork.width / 2, y: at.y - fittedArtwork.height / 2 }
+      : fittedArtwork
     if (canAutoSeparateImportedSvg(asset)) {
       const separated = buildSvgGroupParts(fitted)
       const fittedParts = separated
@@ -1947,6 +1950,32 @@ function App() {
     point.y = clientY
     const local = point.matrixTransform(canvas.getScreenCTM()?.inverse())
     return { x: local.x, y: local.y }
+  }
+
+  const assetDragMime = 'application/x-pixo-asset-id'
+
+  function startAssetDrag(event: React.DragEvent<HTMLButtonElement>, asset: Asset) {
+    event.dataTransfer.effectAllowed = 'copy'
+    event.dataTransfer.setData(assetDragMime, asset.id)
+    event.dataTransfer.setData('text/plain', `pixo-asset:${asset.id}`)
+  }
+
+  function handleCanvasAssetDragOver(event: React.DragEvent<SVGSVGElement>) {
+    if (!Array.from(event.dataTransfer.types).includes(assetDragMime)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  function handleCanvasAssetDrop(event: React.DragEvent<SVGSVGElement>) {
+    const customId = event.dataTransfer.getData(assetDragMime)
+    const plainText = event.dataTransfer.getData('text/plain')
+    const assetId = customId || (plainText.startsWith('pixo-asset:') ? plainText.slice('pixo-asset:'.length) : '')
+    if (!assetId) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const asset = customAssets.find((candidate) => candidate.id === assetId)
+    if (asset) void addAsset(asset, canvasPoint(event.clientX, event.clientY))
   }
 
   function addCanvasSvg(name: string, markup: string, x: number, y: number, width: number, height: number, category = 'Objects', textOptions?: Pick<CanvasObject, 'textContent' | 'fontSize' | 'fontFamily'>, selectAfterAdd = true, freehandPoints?: CanvasObject['freehandPoints']) {
@@ -2805,7 +2834,7 @@ function App() {
             <div className="category-row">{categories.map((item) => <button key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div>
             <div className="library-section-header"><div className="asset-sort-control" ref={assetSortControlRef} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setAssetSortMenuOpen(false) } }}><button type="button" className="asset-sort-button" aria-label={language === 'ru' ? 'Сортировка компонентов' : 'Sort components'} aria-haspopup="listbox" aria-expanded={assetSortMenuOpen} onClick={() => setAssetSortMenuOpen((open) => !open)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); setAssetSortMenuOpen(true); requestAnimationFrame(() => assetSortControlRef.current?.querySelector<HTMLButtonElement>('[role="option"]')?.focus()) } }}><span>{assetSort === 'name' ? (language === 'ru' ? 'Имя А–Я' : 'Name A–Z') : (language === 'ru' ? 'Тип' : 'Type')}</span><ChevronDown size={13} /></button>{assetSortMenuOpen && <div className="asset-sort-options" role="listbox" aria-label={language === 'ru' ? 'Сортировка компонентов' : 'Sort components'}>{([{ value: 'name', label: language === 'ru' ? 'Имя А–Я' : 'Name A–Z' }, { value: 'type', label: language === 'ru' ? 'Тип' : 'Type' }] as const).map((option) => <button type="button" role="option" aria-selected={assetSort === option.value} key={option.value} className={`asset-sort-option ${assetSort === option.value ? 'selected' : ''}`} onClick={() => { setAssetSort(option.value); setAssetSortMenuOpen(false); requestAnimationFrame(() => assetSortControlRef.current?.querySelector<HTMLButtonElement>('.asset-sort-button')?.focus()) }} onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); const options = Array.from(assetSortControlRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []); const direction = event.key === 'ArrowDown' ? 1 : -1; options[(options.indexOf(event.currentTarget) + direction + options.length) % options.length]?.focus() } }}>{option.label}{assetSort === option.value && <Check size={14} />}</button>)}</div>}</div></div>
             <div className="asset-grid">
-              {sortedAssets.map((asset) => <button className="asset-card" key={asset.id} onClick={() => addAsset(asset)} title={`Add ${asset.name} to canvas`}>
+              {sortedAssets.map((asset) => <button className="asset-card" key={asset.id} draggable onDragStart={(event) => startAssetDrag(event, asset)} onClick={() => addAsset(asset)} title={`Drag ${asset.name} onto the canvas or click to add`}>
                 <span className="asset-art"><svg viewBox={asset.viewBox} aria-hidden="true" dangerouslySetInnerHTML={{ __html: namespaceSvgIds(asset.markup, asset.id) }} /></span>
                 <span className="asset-meta"><span className="asset-name">{asset.name}</span></span>
                 <span className="asset-kind">{asset.category}</span>
@@ -2816,14 +2845,14 @@ function App() {
             <section className="imported-files-area">
               <div className="section-heading"><span>Imported files</span><button onClick={() => setLibraryTab('Files')}>View all</button></div>
               <div className="imported-list">
-            {importedFiles.map((asset) => <div className="source-file-entry" key={asset.id}><button className="file-row" title={canAutoSeparateImportedSvg(asset) ? 'Add SVG as separate movable objects when possible' : 'Add the source to the canvas'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{getAssetFileType(asset.source)} · {Math.round(asset.width)} × {Math.round(asset.height)}</small></span><ArrowRight size={13} /></button><button className={`inspect-source-button ${expandedSourceId === asset.id ? 'active' : ''}`} title="Inspect SVG structure" aria-label={`Inspect ${asset.source}`} onClick={() => setExpandedSourceId((id) => id === asset.id ? null : asset.id)}><Layers size={13} /></button>{expandedSourceId === asset.id && <div className="svg-tree-panel"><div className="svg-tree-heading"><span>SVG structure</span><small>{translateRussian(`${expandedNodes.length} elements`, language)}</small></div>{expandedNodes.length ? expandedNodes.map(({ node, depth }) => <div className="svg-tree-row" key={node.path.join('-')} style={{ paddingLeft: `${7 + depth * 12}px` }}><span className="svg-tree-node"><code>{node.tag}</code><span>{node.label}</span></span><button title={`Extract ${node.label}`} aria-label={`Extract ${node.label}`} onClick={() => extractComponent(asset, node)}>Extract</button></div>) : <p className="svg-tree-empty">No extractable SVG elements found.</p>}</div>}</div>)}
+            {importedFiles.map((asset) => <div className="source-file-entry" key={asset.id}><button className="file-row" draggable onDragStart={(event) => startAssetDrag(event, asset)} title={canAutoSeparateImportedSvg(asset) ? 'Drag SVG onto the canvas or click to add separate movable objects' : 'Drag onto the canvas or click to add'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{getAssetFileType(asset.source)} · {Math.round(asset.width)} × {Math.round(asset.height)}</small></span><ArrowRight size={13} /></button><button className={`inspect-source-button ${expandedSourceId === asset.id ? 'active' : ''}`} title="Inspect SVG structure" aria-label={`Inspect ${asset.source}`} onClick={() => setExpandedSourceId((id) => id === asset.id ? null : asset.id)}><Layers size={13} /></button>{expandedSourceId === asset.id && <div className="svg-tree-panel"><div className="svg-tree-heading"><span>SVG structure</span><small>{translateRussian(`${expandedNodes.length} elements`, language)}</small></div>{expandedNodes.length ? expandedNodes.map(({ node, depth }) => <div className="svg-tree-row" key={node.path.join('-')} style={{ paddingLeft: `${7 + depth * 12}px` }}><span className="svg-tree-node"><code>{node.tag}</code><span>{node.label}</span></span><button title={`Extract ${node.label}`} aria-label={`Extract ${node.label}`} onClick={() => extractComponent(asset, node)}>Extract</button></div>) : <p className="svg-tree-empty">No extractable SVG elements found.</p>}</div>}</div>)}
                 {customAssets.length === 0 && <button className="file-row sample-file" onClick={() => fileInput.current?.click()}><span className="file-thumb sample-thumb"><Sparkles size={19} /></span><span className="file-info"><b>Import your first SVG</b><small>Drop a file or browse</small></span><Plus size={13} /></button>}
               </div>
             </section>
           </> : <div className="files-view">
             <div className="section-heading"><span>{libraryTab === 'Files' ? 'Source files' : 'Project assets'}</span><button title={libraryTab === 'Assets' ? 'Create SVG icon' : 'Import SVG'} aria-label={libraryTab === 'Assets' ? 'Create SVG icon' : 'Import SVG'} onClick={() => libraryTab === 'Assets' ? openIconEditor('rectangle') : fileInput.current?.click()}>{libraryTab === 'Assets' ? <Pencil size={13} /> : <Plus size={13} />}</button></div>
             <button className="import-drop" onClick={() => fileInput.current?.click()}><Download size={18} /><b>Import files</b><span>SVG or photo · Up to 5 MB</span></button>
-            {(libraryTab === 'Files' ? importedFiles : customAssets).map((asset) => <button className="file-row" key={asset.id} title={canAutoSeparateImportedSvg(asset) ? 'Add SVG as separate movable objects when possible' : 'Add the source to the canvas'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{asset.category} · {getAssetFileType(asset.source)}</small></span><ArrowRight size={13} /></button>)}
+            {(libraryTab === 'Files' ? importedFiles : customAssets).map((asset) => <button className="file-row" key={asset.id} draggable onDragStart={(event) => startAssetDrag(event, asset)} title={canAutoSeparateImportedSvg(asset) ? 'Drag SVG onto the canvas or click to add separate movable objects' : 'Drag onto the canvas or click to add'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{asset.category} · {getAssetFileType(asset.source)}</small></span><ArrowRight size={13} /></button>)}
             {(libraryTab === 'Files' ? importedFiles : customAssets).length === 0 && <p className="empty-note">Your imported SVGs will appear here.</p>}
           </div>}
           <button className="library-collapse" title="Collapse library" aria-label="Collapse library" onClick={() => setLibraryCollapsed(true)}><ChevronRight size={13} /></button>
@@ -2846,7 +2875,7 @@ function App() {
             <button className="canvas-action" title="Canvas settings" onClick={() => setInspectorTab('Inspector')}><Settings2 size={15} /></button>
           </div>
               <div className="canvas-stage" style={{ '--canvas-background': canvasBackground, '--canvas-grid-image': 'none' } as React.CSSProperties}>
-            <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onPointerLeave={() => { if (!canvasDrawRef.current) eraserCursorRef.current?.setAttribute('display', 'none') }} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
+            <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onDragOver={handleCanvasAssetDragOver} onDrop={handleCanvasAssetDrop} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onPointerLeave={() => { if (!canvasDrawRef.current) eraserCursorRef.current?.setAttribute('display', 'none') }} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
               {objects.filter((item) => isObjectEffectivelyVisible(objects, item)).map((item) => <g key={item.objectId} transform={`translate(${item.x + item.width / 2} ${item.y + item.height / 2}) rotate(${item.rotation}) scale(${item.flipX ? -1 : 1} ${item.flipY ? -1 : 1}) translate(${-item.width / 2} ${-item.height / 2})`} onPointerDown={(event) => startDrag(event, item)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!selectedIds.includes(item.objectId)) setSelectedIds([item.objectId]); setContextMenu({ x: event.clientX, y: event.clientY, objectId: item.objectId }) }} className={`canvas-object ${isObjectEffectivelyLocked(objects, item) ? 'locked' : ''}`} opacity={item.opacity}>
                 {item.isFrame && <rect x={0} y={0} width={item.width} height={item.height} fill="transparent" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="all" />}
                 <CanvasObjectArtwork item={item} />
