@@ -46,8 +46,8 @@ import {
 import type { CanvasObject, DragState, SvgAsset as Asset } from './types/svg'
 import type { Project } from './types/project'
 import { cleanSvg } from './features/svg-import/SvgSanitizer'
-import { extractSvgNode, getSvgStructure, measureSvgArtworkBounds, measureSvgNodeBounds } from './features/svg-import/SvgStructure'
-import { namespaceSvgIds, serializeComposition } from './features/export/SvgExporter'
+import { extractSvgNode, flattenExtractedSymbolViewport, getSvgNodeViewBox, getSvgStructure, measureSvgArtworkBounds, measureSvgNodeBounds } from './features/svg-import/SvgStructure'
+import { measureCompositionBounds, namespaceSvgIds, serializeComposition } from './features/export/SvgExporter'
 import { readWorkspaceValue, writeWorkspaceValue } from './features/storage/workspaceStorage'
 import type { SvgTreeNode } from './features/svg-import/SvgStructure'
 import './App.css'
@@ -226,7 +226,6 @@ function isCanvasPointInsideObject(point: IconPoint, item: CanvasObject) {
   return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
 }
 
-<<<<<<< HEAD
 function clipSegmentToRect(start: IconPoint, end: IconPoint, minX: number, minY: number, maxX: number, maxY: number) {
   const dx = end.x - start.x
   const dy = end.y - start.y
@@ -329,18 +328,18 @@ function fitSvgObjectToArtwork(item: CanvasObject): CanvasObject {
 }
 
 async function fitSvgObjectToVisibleArtwork(item: CanvasObject, backgroundColor = 'transparent'): Promise<CanvasObject> {
-  if ((item.contentBoundsVersion ?? 0) >= 6 || item.isFrame || item.isGroup || getAssetFileType(item.source) !== 'SVG') return item
+  if ((item.contentBoundsVersion ?? 0) >= 13 || item.isFrame || item.isGroup || getAssetFileType(item.source) !== 'SVG') return item
   // Measure the source markup in its current viewBox. Geometric fitting first
   // can clip SVGs whose bounds are reported incorrectly by getBBox().
   const fitted = { ...item, contentBoundsVersion: 0 }
   const bounds = await measureSvgArtworkBounds(fitted, backgroundColor)
-  if (!bounds) return { ...fitted, contentBoundsVersion: 6 }
+  if (!bounds) return { ...fitted, contentBoundsVersion: 13, contentBoundsEmpty: true }
 
   const viewBox = fitted.viewBox.trim().split(/[\s,]+/).map(Number)
-  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return { ...fitted, contentBoundsVersion: 6 }
+  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return { ...fitted, contentBoundsVersion: 13 }
   const [viewX, viewY, viewWidth, viewHeight] = viewBox
   const scale = Math.min(fitted.width / viewWidth, fitted.height / viewHeight)
-  if (!Number.isFinite(scale) || scale <= 0) return { ...fitted, contentBoundsVersion: 6 }
+  if (!Number.isFinite(scale) || scale <= 0) return { ...fitted, contentBoundsVersion: 13 }
   const offsetX = (fitted.width - viewWidth * scale) / 2
   const offsetY = (fitted.height - viewHeight * scale) / 2
   const contentX = offsetX + (bounds.x - viewX) * scale
@@ -363,12 +362,11 @@ async function fitSvgObjectToVisibleArtwork(item: CanvasObject, backgroundColor 
     height: contentHeight,
     viewBox: `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`,
     contentBoundsFitted: true,
-    contentBoundsVersion: 6,
+    contentBoundsVersion: 13,
+    contentBoundsEmpty: false,
   }
 }
 
-=======
->>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
 function getCanvasBackgroundForTheme(background: string | undefined, theme: 'light' | 'dark') {
   const color = background ?? (theme === 'light' ? '#ffffff' : '#101115')
   if (theme === 'dark' && color.toLowerCase() === '#ffffff') return '#101115'
@@ -379,7 +377,7 @@ function getCanvasBackgroundForTheme(background: string | undefined, theme: 'lig
 function fitFrameBounds(objects: CanvasObject[]) {
   return objects.map((object) => {
     if (!object.isFrame || object.category !== 'Group') return object
-    const bounds = getObjectBounds(getFrameDescendants(objects, object.objectId).filter((child) => !child.isFrame))
+    const bounds = getObjectBounds(getFrameDescendants(objects, object.objectId).filter((child) => !child.isFrame && !child.contentBoundsEmpty))
     return bounds ? { ...object, ...bounds } : object
   })
 }
@@ -554,8 +552,9 @@ function canAutoSeparateImportedSvg(asset: Asset) {
 }
 
 function createSvgPartsGroup(root: CanvasObject, parts: CanvasObject[]) {
-  const bounds = getObjectBounds(parts)
-  if (parts.length < 2 || !bounds) return null
+  const visibleParts = parts.filter((part) => !part.contentBoundsEmpty)
+  const bounds = getObjectBounds(visibleParts)
+  if (visibleParts.length < 2 || !bounds) return null
   const groupId = makeId()
   const group: CanvasObject = {
     ...root,
@@ -569,7 +568,7 @@ function createSvgPartsGroup(root: CanvasObject, parts: CanvasObject[]) {
     isGroup: true,
     frameId: root.frameId,
   }
-  return { group, parts: parts.map((part) => ({ ...part, frameId: groupId })) }
+  return { group, parts: visibleParts.map((part) => ({ ...part, frameId: groupId })) }
 }
 
 const svgDefinitionTags = new Set(['defs', 'mask', 'clippath', 'filter', 'pattern', 'lineargradient', 'radialgradient', 'marker'])
@@ -847,8 +846,9 @@ function App() {
     return stored
   })
   const [language, setLanguage] = useState<'en' | 'ru'>(() => readStored('pixo-language', 'ru'))
-  const [exportName, setExportName] = useState('launch-day')
-  const [transparentBackground, setTransparentBackground] = useState(true)
+  const [exportName, setExportName] = useState(() => readStored('pixo-export-name', 'launch-day'))
+  const [transparentBackground, setTransparentBackground] = useState(() => readStored('pixo-export-transparent-background', true))
+  const [includeOffCanvasObjects, setIncludeOffCanvasObjects] = useState(() => readStored('pixo-export-include-off-canvas', false))
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const [activeNav, setActiveNav] = useState('Projects')
@@ -895,6 +895,7 @@ function App() {
   const panelResizeRef = useRef<{ panel: 'library' | 'inspector'; startX: number; width: number } | null>(null)
   const importedFilesResizeRef = useRef<{ startY: number; height: number } | null>(null)
   const colorEditRef = useRef(false)
+  const contentBoundsMigrationVersion = useRef(0)
   const undoStack = useRef<CanvasObject[][]>([])
   const redoStack = useRef<CanvasObject[][]>([])
   const clipboard = useRef<CanvasObject[]>([])
@@ -905,8 +906,17 @@ function App() {
     setCanRedo(false)
   }
   const selected = objects.filter((item) => selectedIds.includes(item.objectId))
+  const visibleExportObjects = objects.filter((item) => isObjectEffectivelyVisible(objects, item))
+  const exportArtworkBounds = measureCompositionBounds(visibleExportObjects)
+  const expandedExportBounds = exportArtworkBounds ? (() => {
+    const left = Math.floor(Math.min(0, exportArtworkBounds.x))
+    const top = Math.floor(Math.min(0, exportArtworkBounds.y))
+    const right = Math.ceil(Math.max(canvasWidth, exportArtworkBounds.x + exportArtworkBounds.width))
+    const bottom = Math.ceil(Math.max(canvasHeight, exportArtworkBounds.y + exportArtworkBounds.height))
+    return { x: left, y: top, width: right - left, height: bottom - top }
+  })() : null
   const selectedBounds = getObjectBounds(selected.flatMap((item) => item.isGroup
-    ? getFrameDescendants(objects, item.objectId).filter((child) => !child.isFrame && isObjectEffectivelyVisible(objects, child))
+    ? getFrameDescendants(objects, item.objectId).filter((child) => !child.isFrame && !child.contentBoundsEmpty && isObjectEffectivelyVisible(objects, child))
     : [item]))
   const current = selected.length === 1 ? selected[0] : undefined
   const canUngroupSelection = selected.length === 1 && Boolean(selected[0].isFrame && objects.some((item) => item.frameId === selected[0].objectId))
@@ -1003,7 +1013,6 @@ function App() {
           return serviceAsset ? { ...asset, name: serviceAsset.name, markup: serviceAsset.markup } : asset
         })
       const nextActiveId = storedActiveId ?? legacyActiveId
-<<<<<<< HEAD
       const projectSource = storedProjects ?? legacyProjects
       const backgroundForProject = (project?: Project) => getCanvasBackgroundForTheme(
         project?.backgroundColor ?? (project ? undefined : canvasBackground),
@@ -1019,34 +1028,41 @@ function App() {
           const grouped = separated ? createSvgPartsGroup(item, separated.parts) : null
           return grouped ? [grouped.group, ...grouped.parts] : [item]
         })
+        const viewportObjects = sourceObjects.map((item) => {
+          if (item.isFrame || getAssetFileType(item.source) !== 'SVG') return item
+          const sourceAsset = nextAssets.find((asset) => asset.id === item.id && asset.source === item.source)
+          const symbolSource = sourceAsset?.sourceFileId
+            ? nextAssets.find((asset) => asset.id === sourceAsset.sourceFileId && asset.source === item.source) ?? sourceAsset
+            : sourceAsset
+          const flattenedSymbol = symbolSource ? flattenExtractedSymbolViewport(item.markup, symbolSource.markup) : null
+          if (!flattenedSymbol) return item
+          const parent = item.frameId ? sourceObjects.find((candidate) => candidate.objectId === item.frameId && candidate.isGroup) : undefined
+          return {
+            ...item,
+            ...(parent ? { x: parent.x, y: parent.y, width: parent.width, height: parent.height } : {}),
+            viewBox: flattenedSymbol.viewBox,
+            markup: flattenedSymbol.markup,
+            contentBoundsVersion: 0,
+            contentBoundsEmpty: false,
+          }
+        })
         const fittedObjects: CanvasObject[] = []
-        for (let index = 0; index < sourceObjects.length; index += 4) {
-          const batch = await Promise.all(sourceObjects.slice(index, index + 4).map((item) =>
-            item.isFrame || getAssetFileType(item.source) !== 'SVG' ? item : fitSvgObjectToVisibleArtwork(item, backgroundColor),
+        for (let index = 0; index < viewportObjects.length; index += 4) {
+          const batch = await Promise.all(viewportObjects.slice(index, index + 4).map((item) =>
+            item.isFrame || getAssetFileType(item.source) !== 'SVG'
+              ? item
+              : fitSvgObjectToVisibleArtwork(item, backgroundColor),
           ))
           fittedObjects.push(...batch)
         }
+        const visibleFittedObjects = fittedObjects.filter((item) => item.isFrame || !item.contentBoundsEmpty || !item.frameId)
         return putFrameHitTargetsBehindContents(
-          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(fittedObjects, nextAssets), nextAssets)),
+          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(visibleFittedObjects, nextAssets), nextAssets)),
         )
       }
       const activeProjectData = projectSource.find((project) => project.id === nextActiveId)
       const nextObjects = await normalizeObjects(storedObjects ?? legacyObjects, backgroundForProject(activeProjectData))
       const nextProjects = await Promise.all(projectSource.map(async (project) => ({
-=======
-      const normalizeObjects = (items: CanvasObject[]) => {
-        const sourceObjects = keepSourceObjects(items, nextAssets).flatMap((item) => {
-          if (item.isFrame || item.frameId || (!item.imported && !item.sourceFileId) || getAssetFileType(item.source) !== 'SVG') return [item]
-          const separated = buildSvgGroupParts(item)
-          return separated?.parts.length ? [...(separated.group ? [separated.group] : []), ...separated.parts] : [item]
-        })
-        return putFrameHitTargetsBehindContents(
-          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(sourceObjects, nextAssets), nextAssets)),
-        )
-      }
-      const nextObjects = normalizeObjects(storedObjects ?? legacyObjects)
-      const nextProjects = (storedProjects ?? legacyProjects).map((project) => ({
->>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
         ...project,
         objects: project.id === nextActiveId ? nextObjects : await normalizeObjects(project.objects ?? [], backgroundForProject(project)),
       })))
@@ -1098,6 +1114,61 @@ function App() {
   }, [objects, customAssets, storageReady])
 
   useEffect(() => {
+    if (!storageReady || contentBoundsMigrationVersion.current >= 13) return
+    const staleObjects = objectsRef.current.filter((item) => !item.isFrame
+      && getAssetFileType(item.source) === 'SVG'
+      && (item.contentBoundsVersion ?? 0) < 13)
+    if (!staleObjects.length) {
+      contentBoundsMigrationVersion.current = 13
+      return
+    }
+    let cancelled = false
+    let completed = false
+    async function migrateContentBounds() {
+      const currentObjects = objectsRef.current
+      const migrated = [...currentObjects]
+      for (let index = 0; index < migrated.length; index += 4) {
+        const batch = await Promise.all(migrated.slice(index, index + 4).map((item) =>
+          !item.isFrame && getAssetFileType(item.source) === 'SVG' && (item.contentBoundsVersion ?? 0) < 13
+            ? (() => {
+                const parent = item.frameId ? currentObjects.find((candidate) => candidate.objectId === item.frameId && candidate.isGroup) : undefined
+                const source = customAssets.find((asset) => asset.id === item.id && asset.source === item.source)
+                const symbolSource = source?.sourceFileId
+                  ? customAssets.find((asset) => asset.id === source.sourceFileId && asset.source === item.source) ?? source
+                  : source
+                const flattenedSymbol = symbolSource ? flattenExtractedSymbolViewport(item.markup, symbolSource.markup) : null
+                const sourceViewport = flattenedSymbol
+                  ? { ...item, ...(parent ? { x: parent.x, y: parent.y, width: parent.width, height: parent.height } : {}), viewBox: flattenedSymbol.viewBox, markup: flattenedSymbol.markup, contentBoundsVersion: 0, contentBoundsEmpty: false }
+                  : source && parent && canAutoSeparateImportedSvg(source)
+                    ? { ...item, x: parent.x, y: parent.y, width: parent.width, height: parent.height, viewBox: source.viewBox, contentBoundsVersion: 0, contentBoundsEmpty: false }
+                    : item
+                return fitSvgObjectToVisibleArtwork(sourceViewport, canvasBackground)
+              })()
+            : item,
+        ))
+        migrated.splice(index, batch.length, ...batch)
+      }
+      if (cancelled) return
+      const removedPartParents = new Map(migrated
+        .filter((item) => !item.isFrame && item.contentBoundsEmpty && item.frameId)
+        .map((item) => [item.objectId, item.frameId!]))
+      const visibleObjects = migrated.filter((item) => item.isFrame || !item.contentBoundsEmpty || !item.frameId)
+      const nextObjects = putFrameHitTargetsBehindContents(fitFrameBounds(visibleObjects))
+      const nextObjectIds = new Set(nextObjects.map((item) => item.objectId))
+      objectsRef.current = nextObjects
+      setObjects(nextObjects)
+      setSelectedIds((ids) => [...new Set(ids.flatMap((id) => nextObjectIds.has(id) ? [id] : removedPartParents.has(id) ? [removedPartParents.get(id)!] : []))])
+      contentBoundsMigrationVersion.current = 13
+      completed = true
+    }
+    void migrateContentBounds()
+    return () => {
+      cancelled = true
+      if (!completed) contentBoundsMigrationVersion.current = 0
+    }
+  }, [canvasBackground, customAssets, storageReady])
+
+  useEffect(() => {
     if (!storageReady) return
     void writeWorkspaceValue('active-project-id', currentProjectId)
     const timer = window.setTimeout(() => {
@@ -1141,9 +1212,12 @@ function App() {
     localStorage.setItem('pixo-interface-theme-v2', JSON.stringify(interfaceTheme))
     localStorage.setItem('pixo-interface-theme-v3', JSON.stringify(interfaceTheme))
     localStorage.setItem('pixo-language', JSON.stringify(language))
+    localStorage.setItem('pixo-export-name', JSON.stringify(exportName))
+    localStorage.setItem('pixo-export-transparent-background', JSON.stringify(transparentBackground))
+    localStorage.setItem('pixo-export-include-off-canvas', JSON.stringify(includeOffCanvasObjects))
     document.documentElement.style.colorScheme = resolvedTheme
     document.documentElement.lang = language
-  }, [profileName, iconColor, canvasBackground, snapToGrid, interfaceTheme, resolvedTheme, language])
+  }, [profileName, iconColor, canvasBackground, snapToGrid, interfaceTheme, resolvedTheme, language, exportName, transparentBackground, includeOffCanvasObjects])
 
   useEffect(() => {
     const root = appShellRef.current
@@ -1330,8 +1404,6 @@ function App() {
       })
     }
     const onPointerUp = () => {
-      const drag = dragRef.current
-      if (drag && !drag.moved && drag.selectOnClick) setSelectedIds([drag.selectOnClick])
       dragRef.current = null
       selectionDragRef.current = null
       panelResizeRef.current = null
@@ -1357,6 +1429,11 @@ function App() {
       point.x = event.clientX
       point.y = event.clientY
       const local = point.matrixTransform(canvas.getScreenCTM()?.inverse())
+      const hitsObject = [...objects].reverse().some((item) => !item.isFrame
+        && !isObjectEffectivelyLocked(objects, item)
+        && isObjectEffectivelyVisible(objects, item)
+        && isCanvasPointInsideObject(local, item))
+      if (hitsObject) return
       selectionDragRef.current = { startX: local.x, startY: local.y }
       setSelectionRect({ x: local.x, y: local.y, width: 0, height: 0 })
       canvas.setPointerCapture(event.pointerId)
@@ -1378,7 +1455,7 @@ function App() {
         && item.y < bottom && item.y + item.height > top)
         .map((item) => item.objectId)
       const moved = Math.abs(right - left) > 2 || Math.abs(bottom - top) > 2
-      setSelectedIds(moved ? ids : [])
+      if (moved) setSelectedIds(ids)
       suppressCanvasClickRef.current = moved
       selectionDragRef.current = null
       setSelectionRect(null)
@@ -1610,34 +1687,25 @@ function App() {
       ? flattenSvgTree(structure).filter(({ node }) => node.children.length === 0 && renderableTags.has(node.tag))
       : logicalNodes).slice(0, 200)
     if (nodes.length < 2) return null
-    const values = root.viewBox.trim().split(/[\s,]+/).map(Number)
-    const [viewX, viewY, viewWidth, viewHeight] = values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0
-      ? values
-      : [0, 0, root.width, root.height]
-    const fitScale = Math.min(root.width / viewWidth, root.height / viewHeight)
-    const viewportOffsetX = (root.width - viewWidth * fitScale) / 2
-    const viewportOffsetY = (root.height - viewHeight * fitScale) / 2
     const groupId = granularity === 'primitive' ? makeId() : null
     const parts = nodes.flatMap(({ node }, index) => {
       const markup = extractSvgNode(root, node.path)
       if (!markup) return []
-      const measuredBounds = measureSvgNodeBounds(root, node.path)
-      const bounds = measuredBounds ?? { x: viewX, y: viewY, width: viewWidth, height: viewHeight }
       const label = node.tag === 'g' && /^obj-[\w-]+$/.test(node.label) ? `Group ${index + 1}` : node.label
       return [{
         ...root,
         objectId: makeId(),
         name: `${root.name} · ${label || `Object ${index + 1}`}`,
-        x: root.x + viewportOffsetX + (bounds.x - viewX) * fitScale,
-        y: root.y + viewportOffsetY + (bounds.y - viewY) * fitScale,
-        width: bounds.width * fitScale,
-        height: bounds.height * fitScale,
-        viewBox: `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`,
+        x: root.x,
+        y: root.y,
+        width: root.width,
+        height: root.height,
+        viewBox: getSvgNodeViewBox(root, node.path),
         markup,
         frameId: groupId ?? root.frameId,
         isFrame: false,
-        contentBoundsFitted: Boolean(measuredBounds),
-        contentBoundsVersion: measuredBounds ? 4 : undefined,
+        contentBoundsFitted: false,
+        contentBoundsVersion: undefined,
       }]
     })
     if (parts.length < 2) return null
@@ -1785,10 +1853,14 @@ function App() {
       width, height, rotation: 0, opacity: 1, visible: true, locked: false,
       proportionsLocked: true,
     }
-    const fitted = await fitSvgObjectToVisibleArtwork(next, canvasBackground)
+    const fitBackground = canvasBackground
+    const fitted = await fitSvgObjectToVisibleArtwork(next, fitBackground)
     if (canAutoSeparateImportedSvg(asset)) {
       const separated = buildSvgGroupParts(fitted)
-      const grouped = separated ? createSvgPartsGroup(fitted, separated.parts) : null
+      const fittedParts = separated
+        ? await Promise.all(separated.parts.map((part) => fitSvgObjectToVisibleArtwork(part, fitBackground)))
+        : []
+      const grouped = separated ? createSvgPartsGroup(fitted, fittedParts) : null
       if (grouped) {
         commit([...objectsRef.current, grouped.group, ...grouped.parts])
         setSelectedIds([grouped.group.objectId])
@@ -1806,18 +1878,21 @@ function App() {
     return next
   }
 
-  function separateSelectedSvg() {
+  async function separateSelectedSvg() {
     if (!current || (!current.imported && !current.sourceFileId)) return
     const separated = buildSvgGroupParts(current, 'primitive')
-    if (!separated?.group) {
+    const parts = separated
+      ? await Promise.all(separated.parts.map((part) => fitSvgObjectToVisibleArtwork(part, canvasBackground)))
+      : []
+    const grouped = separated ? createSvgPartsGroup(current, parts) : null
+    if (!grouped) {
       setToast('This SVG has no separate vector objects')
       return
     }
-    const group = separated.group
-    const next = objectsRef.current.flatMap((item) => item.objectId === current.objectId ? [group, ...separated.parts] : [item])
+    const next = objectsRef.current.flatMap((item) => item.objectId === current.objectId ? [grouped.group, ...grouped.parts] : [item])
     commit(next)
-    setSelectedIds([group.objectId])
-    setToast(`Separated into a group with ${separated.parts.length} objects`)
+    setSelectedIds([grouped.group.objectId])
+    setToast(`Separated into a group with ${grouped.parts.length} objects`)
   }
 
   function ungroupSelected() {
@@ -1914,7 +1989,7 @@ function App() {
     const category = node.tag === 'g' || node.tag === 'svg' ? 'Groups' : 'Objects'
     const component: Asset = {
       id: makeId(), name: node.label, category, width: source.width, height: source.height,
-      viewBox: source.viewBox, markup, source: source.source, sourceFileId: source.id,
+      viewBox: getSvgNodeViewBox(source, node.path), markup, source: source.source, sourceFileId: source.id,
     }
     setCustomAssets((items) => [component, ...items])
     setSaved(false)
@@ -2130,7 +2205,12 @@ function App() {
 
   function handleCanvasClick(event: React.MouseEvent<SVGSVGElement>) {
     const clickedObject = event.target instanceof Element && event.target.closest('.canvas-object')
-    if (!clickedObject && (activeTool === 'Select' || activeTool === 'Layers') && !suppressCanvasClickRef.current) setSelectedIds([])
+    const point = canvasPoint(event.clientX, event.clientY)
+    const clickedObjectBounds = [...objects].reverse().some((item) => !item.isFrame
+      && !isObjectEffectivelyLocked(objects, item)
+      && isObjectEffectivelyVisible(objects, item)
+      && isCanvasPointInsideObject(point, item))
+    if (!clickedObject && !clickedObjectBounds && (activeTool === 'Select' || activeTool === 'Layers') && !suppressCanvasClickRef.current) setSelectedIds([])
     suppressCanvasClickRef.current = false
   }
 
@@ -2418,20 +2498,6 @@ function App() {
 
   function startDrag(event: React.PointerEvent<SVGElement>, item: CanvasObject, mode: DragState['mode'] = 'move', handle?: string) {
     let dragItem = item
-    let selectOnClick: string | undefined
-    if (!event.altKey && mode === 'move' && !selectedIds.includes(item.objectId)) {
-      const point = canvasPoint(event.clientX, event.clientY)
-      const selectedUnderPointer = [...objects].reverse().find((candidate) => selectedIds.includes(candidate.objectId)
-        && candidate.objectId !== item.objectId
-        && !candidate.isFrame
-        && !isObjectEffectivelyLocked(objects, candidate)
-        && isObjectEffectivelyVisible(objects, candidate)
-        && isCanvasPointInsideObject(point, candidate))
-      if (selectedUnderPointer) {
-        dragItem = selectedUnderPointer
-        selectOnClick = item.objectId
-      }
-    }
     if (event.altKey && mode === 'move') {
       const point = canvasPoint(event.clientX, event.clientY)
       const overlapStack = [...objects].reverse().filter((candidate) => !candidate.isFrame
@@ -2441,11 +2507,6 @@ function App() {
       const currentIndex = overlapStack.findIndex((candidate) => candidate.objectId === item.objectId)
       dragItem = overlapStack[currentIndex + 1] ?? (currentIndex === -1 ? overlapStack[0] : undefined) ?? item
     }
-<<<<<<< HEAD
-    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
-    event.stopPropagation()
-    const clickedSelection = selectedIds.includes(dragItem.objectId)
-=======
     const frameAncestors = getFrameAncestors(objects, dragItem)
     const moveIndividual = event.altKey && mode === 'move'
     const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId) && !ancestor.isGroup)
@@ -2453,7 +2514,6 @@ function App() {
     if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
     event.stopPropagation()
     const clickedSelection = selectedIds.includes(dragItem.objectId) || Boolean(dragFrameAncestor)
->>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
     if (!event.shiftKey && !clickedSelection) setSelectedIds([dragItem.objectId])
     if (event.shiftKey) {
       setSelectedIds((ids) => ids.includes(dragItem.objectId) ? ids.filter((id) => id !== dragItem.objectId) : [...ids, dragItem.objectId])
@@ -2464,16 +2524,10 @@ function App() {
     point.x = event.clientX
     point.y = event.clientY
     const local = point.matrixTransform(canvasRef.current.getScreenCTM()?.inverse())
-<<<<<<< HEAD
-    // Drag the actual child hit by the pointer, even when its parent frame is selected.
-    // The frame itself still moves as a unit when its empty area is dragged.
-    const movingSelection = clickedSelection ? selected : [dragItem]
-=======
     // A click on a group child selects that child; selected frame containers still drag as a unit.
     const movingSelection = dragFrameAncestor
       ? [dragFrameAncestor]
       : clickedSelection ? selected : [dragItem]
->>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
     const dragItems = movingSelection.flatMap((selectedItem) => selectedItem.isFrame
       ? [selectedItem, ...getFrameDescendants(objects, selectedItem.objectId)]
       : [selectedItem])
@@ -2486,7 +2540,6 @@ function App() {
     dragRef.current = {
       id: dragItem.objectId, mode, handle, startX: local.x, startY: local.y,
       x: dragItem.x, y: dragItem.y, width: dragItem.width, height: dragItem.height,
-      selectOnClick,
       objectIds: dragItems.map((selectedItem) => selectedItem.objectId),
       snapshots: dragItems.map(({ objectId, x, y, width, height }) => ({ objectId, x, y, width, height })),
       bounds,
@@ -2642,8 +2695,10 @@ function App() {
   }
 
   function exportSvg() {
-    const visibleObjects = objects.filter((item) => isObjectEffectivelyVisible(objects, item))
-    const blob = new Blob([serializeComposition(visibleObjects, transparentBackground, canvasBackground, canvasWidth, canvasHeight)], { type: 'image/svg+xml' })
+    const bounds = includeOffCanvasObjects ? expandedExportBounds : null
+    const exportWidth = bounds?.width ?? canvasWidth
+    const exportHeight = bounds?.height ?? canvasHeight
+    const blob = new Blob([serializeComposition(visibleExportObjects, transparentBackground, canvasBackground, exportWidth, exportHeight, bounds?.x ?? 0, bounds?.y ?? 0)], { type: 'image/svg+xml' })
     const url = URL.createObjectURL(blob)
     const link = window.document.createElement('a')
     link.href = url
@@ -2694,8 +2749,16 @@ function App() {
       if (command && event.key.toLowerCase() === 'v') pasteObjects()
       if (command && event.key.toLowerCase() === 'a') { event.preventDefault(); setSelectedIds(objects.map((item) => item.objectId)) }
       if (event.key === 'Delete' || event.key === 'Backspace') deleteSelected()
-      if (event.key.startsWith('Arrow') && selected.length) {
+      if (event.key.startsWith('Arrow')) {
         event.preventDefault()
+        if (!selected.length) {
+          const distance = (event.shiftKey ? 160 : 40) / zoom
+          setCanvasCenter((center) => ({
+            x: center.x + (event.key === 'ArrowRight' ? distance : event.key === 'ArrowLeft' ? -distance : 0),
+            y: center.y + (event.key === 'ArrowDown' ? distance : event.key === 'ArrowUp' ? -distance : 0),
+          }))
+          return
+        }
         const distance = event.shiftKey ? 10 : 1
         const patch = event.key === 'ArrowLeft' ? { x: -distance } : event.key === 'ArrowRight' ? { x: distance } : event.key === 'ArrowUp' ? { y: -distance } : { y: distance }
         const movingIds = new Set<string>()
@@ -2848,7 +2911,7 @@ function App() {
               <div className="canvas-stage" style={{ '--canvas-background': canvasBackground, '--canvas-grid-image': 'none' } as React.CSSProperties}>
             <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onPointerLeave={() => { if (!canvasDrawRef.current) eraserCursorRef.current?.setAttribute('display', 'none') }} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
               {objects.filter((item) => isObjectEffectivelyVisible(objects, item)).map((item) => <g key={item.objectId} transform={`translate(${item.x + item.width / 2} ${item.y + item.height / 2}) rotate(${item.rotation}) scale(${item.flipX ? -1 : 1} ${item.flipY ? -1 : 1}) translate(${-item.width / 2} ${-item.height / 2})`} onPointerDown={(event) => startDrag(event, item)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!selectedIds.includes(item.objectId)) setSelectedIds([item.objectId]); setContextMenu({ x: event.clientX, y: event.clientY, objectId: item.objectId }) }} className={`canvas-object ${isObjectEffectivelyLocked(objects, item) ? 'locked' : ''}`} opacity={item.opacity}>
-                <rect x={0} y={0} width={item.width} height={item.height} fill="transparent" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="all" />
+                {item.isFrame && <rect x={0} y={0} width={item.width} height={item.height} fill="transparent" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="all" />}
                 <CanvasObjectArtwork item={item} />
                 {selected.length === 1 && selectedIds.includes(item.objectId) && !item.isFrame && <g className="selection-box" pointerEvents="none"><rect x={0} y={0} width={item.width} height={item.height} fill="none" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" />{[[0, 0, 'nw'], [item.width, 0, 'ne'], [0, item.height, 'sw'], [item.width, item.height, 'se']].map(([x, y, handle]) => <rect key={String(handle)} className={`resize-handle handle-${handle}`} x={Number(x) - 4} y={Number(y) - 4} width={8} height={8} rx={1} fill="#fff" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="all" onPointerDown={(event) => startDrag(event, item, 'resize', String(handle))} />)}</g>}
               </g>)}
@@ -2983,6 +3046,7 @@ function App() {
         <div className="export-header"><div className="export-heading"><span className="dialog-icon"><Upload size={15} /></span><div><h2 id="export-title">Export composition</h2><p>Save your work in the format you need</p></div></div><button className="icon-button" aria-label="Close export dialog" onClick={() => setShowExport(false)}><X size={17} /></button></div>
         <label className="export-name-field"><span>File name</span><div><input placeholder="launch-day55" value={exportName} onChange={(event) => setExportName(event.target.value)} /><b>.svg</b></div></label>
         <div className="export-canvas-field"><span className="export-field-label">Canvas</span><div className="export-dimensions"><div className="export-dimension"><span>W</span><NumericField label="" value={canvasWidth} onChange={(value) => updateCanvasDimension('width', value)} /></div><span className="export-multiply">×</span><div className="export-dimension"><span>H</span><NumericField label="" value={canvasHeight} onChange={(value) => updateCanvasDimension('height', value)} /></div><span className="export-units">px</span></div></div>
+        <button className="background-toggle" aria-pressed={includeOffCanvasObjects} onClick={() => setIncludeOffCanvasObjects((value) => !value)}><span className={`check-box ${includeOffCanvasObjects ? 'is-checked' : ''}`}>{includeOffCanvasObjects && <Check size={12} />}</span><span className="background-toggle-copy"><span>{language === 'ru' ? 'Включить объекты за краями холста' : 'Include objects beyond canvas edges'}</span><small>{includeOffCanvasObjects && expandedExportBounds ? `${language === 'ru' ? 'Размер файла' : 'Export size'}: ${expandedExportBounds.width} × ${expandedExportBounds.height} px` : (language === 'ru' ? 'Расширить экспорт, чтобы не обрезать вынесенные объекты.' : 'Expand export bounds so objects outside the canvas are not clipped.')}</small></span></button>
         <button className="background-toggle" aria-pressed={transparentBackground} onClick={() => setTransparentBackground((value) => !value)}><span className={`check-box ${transparentBackground ? 'is-checked' : ''}`}>{transparentBackground && <Check size={12} />}</span><span className="background-toggle-copy"><span>Transparent background</span><small>Vector shapes stay editable in your design tools.</small></span></button>
         <div className="dialog-actions"><button className="button button-subtle" onClick={() => setShowExport(false)}>Cancel</button><button className="button button-primary" onClick={exportSvg}><Upload size={14} />Export SVG</button></div>
       </section></div>}

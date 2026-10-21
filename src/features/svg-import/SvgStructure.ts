@@ -35,6 +35,20 @@ export function getSvgStructure(markup: string): SvgTreeNode[] {
   return build(document.documentElement, [])
 }
 
+export function getSvgNodeViewBox(asset: SvgAsset, path: number[]) {
+  const document = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${asset.markup}</svg>`, 'image/svg+xml')
+  if (document.querySelector('parsererror') || path.length === 0) return asset.viewBox
+  let element: Element = document.documentElement
+  let symbolViewBox: string | null = null
+  for (const childIndex of path) {
+    const child = element.children.item(childIndex)
+    if (!child) return asset.viewBox
+    element = child
+    if (element.localName === 'symbol') symbolViewBox = element.getAttribute('viewBox')
+  }
+  return symbolViewBox ?? asset.viewBox
+}
+
 export function extractSvgNode(asset: SvgAsset, path: number[]) {
   const document = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${asset.markup}</svg>`, 'image/svg+xml')
   if (document.querySelector('parsererror') || path.length === 0) return null
@@ -51,19 +65,30 @@ export function extractSvgNode(asset: SvgAsset, path: number[]) {
 
   function renderableElement(element: Element, includeChildren: boolean) {
     if (element.localName !== 'symbol') return element.cloneNode(includeChildren) as Element
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     for (const attribute of Array.from(element.attributes)) {
-      if (attribute.name !== 'id') svg.setAttribute(attribute.name, attribute.value)
+      if (!['viewBox', 'preserveAspectRatio', 'refX', 'refY', 'width', 'height', 'overflow'].includes(attribute.name)) {
+        group.setAttribute(attribute.name, attribute.value)
+      }
     }
     if (includeChildren) {
-      for (const child of Array.from(element.childNodes)) svg.append(document.importNode(child, true))
+      for (const child of Array.from(element.childNodes)) group.append(document.importNode(child, true))
     }
-    return svg
+    return group
   }
 
   let extracted = renderableElement(target, true)
   for (const ancestor of ancestors.slice(0, -1).reverse()) {
-    const wrapper = renderableElement(ancestor, false)
+    const wrapper = ancestor.localName === 'symbol'
+      ? document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      : renderableElement(ancestor, false)
+    if (ancestor.localName === 'symbol') {
+      for (const attribute of Array.from(ancestor.attributes)) {
+        if (!['viewBox', 'preserveAspectRatio', 'refX', 'refY', 'width', 'height', 'overflow'].includes(attribute.name)) {
+          wrapper.setAttribute(attribute.name, attribute.value)
+        }
+      }
+    }
     wrapper.append(extracted)
     extracted = wrapper
   }
@@ -82,6 +107,34 @@ export function extractSvgNode(asset: SvgAsset, path: number[]) {
   }
   output.append(document.importNode(extracted, true))
   return output.innerHTML
+}
+
+export function flattenExtractedSymbolViewport(markup: string, sourceMarkup: string) {
+  const partDocument = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${markup}</svg>`, 'image/svg+xml')
+  const sourceDocument = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${sourceMarkup}</svg>`, 'image/svg+xml')
+  if (partDocument.querySelector('parsererror') || sourceDocument.querySelector('parsererror')) return null
+  const root = partDocument.documentElement
+  const symbolViewport = Array.from(root.children).find((element) => element.localName === 'svg')
+  const viewBox = symbolViewport?.getAttribute('viewBox')
+  if (!symbolViewport || !viewBox) return null
+  const viewBoxValues = viewBox.trim().split(/[\s,]+/).map(Number)
+  if (viewBoxValues.length !== 4 || !viewBoxValues.every(Number.isFinite) || viewBoxValues[2] <= 0 || viewBoxValues[3] <= 0) return null
+  const matchesSourceSymbol = Array.from(sourceDocument.querySelectorAll('symbol')).some((symbol) => {
+    const symbolValues = (symbol.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number)
+    return symbolValues.length === 4 && symbolValues.every(Number.isFinite)
+      && symbolValues.every((value, index) => Math.abs(value - viewBoxValues[index]) < 0.001)
+  })
+  if (!matchesSourceSymbol) return null
+
+  const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  for (const attribute of Array.from(symbolViewport.attributes)) {
+    if (!['viewBox', 'preserveAspectRatio', 'refX', 'refY', 'width', 'height', 'overflow'].includes(attribute.name)) {
+      wrapper.setAttribute(attribute.name, attribute.value)
+    }
+  }
+  while (symbolViewport.firstChild) wrapper.append(symbolViewport.firstChild)
+  symbolViewport.replaceWith(wrapper)
+  return { markup: root.innerHTML, viewBox }
 }
 
 export function measureSvgNodeBounds(asset: SvgAsset, path: number[]) {
@@ -196,6 +249,44 @@ export async function measureSvgArtworkBounds(asset: SvgAsset, backgroundColor =
     const background = context.getImageData(0, 0, 1, 1).data
     context.drawImage(image, 0, 0, width, height)
     const pixels = context.getImageData(0, 0, width, height).data
+    const isBackgroundPixel = (index: number) => {
+      const alpha = pixels[index + 3]
+      if (background[3] < 8) return alpha < 8
+      if (Math.abs(alpha - background[3]) >= 8) return false
+      return Math.abs(pixels[index] - background[0])
+        + Math.abs(pixels[index + 1] - background[1])
+        + Math.abs(pixels[index + 2] - background[2]) < 48
+    }
+    // Only ignore pixels matching the canvas colour when they are reachable
+    // from an edge. This drops an SVG artboard background while preserving
+    // dark details inside the illustration that use the same colour.
+    const edgeBackground = new Uint8Array(width * height)
+    const queue = new Int32Array(width * height)
+    let queueStart = 0
+    let queueEnd = 0
+    const enqueue = (x: number, y: number) => {
+      const position = y * width + x
+      if (edgeBackground[position] || !isBackgroundPixel(position * 4)) return
+      edgeBackground[position] = 1
+      queue[queueEnd++] = position
+    }
+    for (let x = 0; x < width; x += 1) {
+      enqueue(x, 0)
+      enqueue(x, height - 1)
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      enqueue(0, y)
+      enqueue(width - 1, y)
+    }
+    while (queueStart < queueEnd) {
+      const position = queue[queueStart++]
+      const x = position % width
+      const y = Math.floor(position / width)
+      if (x > 0) enqueue(x - 1, y)
+      if (x + 1 < width) enqueue(x + 1, y)
+      if (y > 0) enqueue(x, y - 1)
+      if (y + 1 < height) enqueue(x, y + 1)
+    }
     let left = width
     let top = height
     let right = -1
@@ -203,11 +294,7 @@ export async function measureSvgArtworkBounds(asset: SvgAsset, backgroundColor =
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const pixel = (y * width + x) * 4
-        if (pixels[pixel + 3] < 8) continue
-        const colorDistance = Math.abs(pixels[pixel] - background[0])
-          + Math.abs(pixels[pixel + 1] - background[1])
-          + Math.abs(pixels[pixel + 2] - background[2])
-        if (colorDistance < 24) continue
+        if (pixels[pixel + 3] < 8 || edgeBackground[y * width + x]) continue
         left = Math.min(left, x)
         top = Math.min(top, y)
         right = Math.max(right, x)

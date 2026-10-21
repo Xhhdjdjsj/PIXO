@@ -31,15 +31,37 @@ export function namespaceSvgIds(markup: string, namespace: string) {
   return document.documentElement.innerHTML
 }
 
-export function serializeComposition(objects: CanvasObject[], transparentBackground: boolean, backgroundColor = '#101114', width = 1440, height = 900) {
+export function measureCompositionBounds(objects: CanvasObject[]) {
+  const artwork = objects.filter((item) => item.visible && !item.isFrame && !item.isGroup && !item.contentBoundsEmpty && item.width > 0 && item.height > 0)
+  if (!artwork.length) return null
+
+  const bounds = artwork.map((item) => {
+    const angle = (item.rotation * Math.PI) / 180
+    const halfWidth = Math.abs(Math.cos(angle)) * item.width / 2 + Math.abs(Math.sin(angle)) * item.height / 2
+    const halfHeight = Math.abs(Math.sin(angle)) * item.width / 2 + Math.abs(Math.cos(angle)) * item.height / 2
+    const centerX = item.x + item.width / 2
+    const centerY = item.y + item.height / 2
+    return { left: centerX - halfWidth, top: centerY - halfHeight, right: centerX + halfWidth, bottom: centerY + halfHeight }
+  })
+
+  const left = Math.min(...bounds.map((bound) => bound.left))
+  const top = Math.min(...bounds.map((bound) => bound.top))
+  const right = Math.max(...bounds.map((bound) => bound.right))
+  const bottom = Math.max(...bounds.map((bound) => bound.bottom))
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
+export function serializeComposition(objects: CanvasObject[], transparentBackground: boolean, backgroundColor = '#101114', width = 1440, height = 900, viewBoxX = 0, viewBoxY = 0) {
   const document = window.document.implementation.createDocument('http://www.w3.org/2000/svg', 'svg', null)
   const root = document.documentElement
   root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
   root.setAttribute('width', String(width))
   root.setAttribute('height', String(height))
-  root.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  root.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${width} ${height}`)
   if (!transparentBackground) {
     const background = document.createElementNS(root.namespaceURI, 'rect')
+    background.setAttribute('x', String(viewBoxX))
+    background.setAttribute('y', String(viewBoxY))
     background.setAttribute('width', '100%')
     background.setAttribute('height', '100%')
     background.setAttribute('fill', backgroundColor)
