@@ -670,8 +670,8 @@ function App() {
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const [activeNav, setActiveNav] = useState('Projects')
-  const [showLanding, setShowLanding] = useState(true)
-  const [showProjects, setShowProjects] = useState(false)
+  const [showLanding, setShowLanding] = useState(() => readStored<'landing' | 'projects' | 'editor'>('pixo-last-view', 'landing') === 'landing')
+  const [showProjects, setShowProjects] = useState(() => readStored<'landing' | 'projects' | 'editor'>('pixo-last-view', 'landing') === 'projects')
   const [activeTool, setActiveTool] = useState('Select')
   const [activeRailItem, setActiveRailItem] = useState<'Library' | 'Layers' | 'Files' | 'Assets' | null>('Library')
   const [mobilePanel, setMobilePanel] = useState<'library' | 'inspector' | null>(null)
@@ -893,6 +893,11 @@ function App() {
     media.addEventListener('change', updateTheme)
     return () => media.removeEventListener('change', updateTheme)
   }, [])
+
+  useEffect(() => {
+    const lastView = showLanding ? 'landing' : showProjects ? 'projects' : 'editor'
+    localStorage.setItem('pixo-last-view', JSON.stringify(lastView))
+  }, [showLanding, showProjects])
 
   useEffect(() => {
     localStorage.setItem('pixo-profile-name', JSON.stringify(profileName))
@@ -1662,6 +1667,24 @@ function App() {
     }
     const clickedObject = event.target instanceof Element && event.target.closest('.canvas-object')
     const clickedHandle = event.target instanceof Element && event.target.closest('.resize-handle')
+    if (activeTool === 'Select' && event.button === 0 && !clickedObject && !clickedHandle) {
+      const point = canvasPoint(event.clientX, event.clientY)
+      const hitObject = [...objects].reverse().find((item) => {
+        if (item.isFrame || isObjectEffectivelyLocked(objects, item) || !isObjectEffectivelyVisible(objects, item)) return false
+        const centerX = item.x + item.width / 2
+        const centerY = item.y + item.height / 2
+        const angle = -(item.rotation * Math.PI) / 180
+        const dx = point.x - centerX
+        const dy = point.y - centerY
+        const localX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle)
+        const localY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle)
+        return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
+      })
+      if (hitObject) {
+        startDrag(event, hitObject)
+        return
+      }
+    }
     if (activeTool === 'Pan' && !clickedObject && !clickedHandle) {
       event.preventDefault()
       panRef.current = { startX: event.clientX, startY: event.clientY, centerX: canvasCenter.x, centerY: canvasCenter.y }
