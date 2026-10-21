@@ -68,6 +68,13 @@ function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value))
 }
 
+function getProportionalResizeScale(width: number, height: number, targetWidth: number, targetHeight: number) {
+  if (width <= 0 || height <= 0) return 1
+  const startDiagonal = Math.hypot(width, height)
+  const targetDiagonal = Math.hypot(Math.max(30, targetWidth), Math.max(30, targetHeight))
+  return Math.max(30 / width, 30 / height, targetDiagonal / startDiagonal)
+}
+
 function parseColor(value: string | null | undefined): RgbaColor {
   const source = (value || defaultPaint).trim()
   const hex = source.match(/^#([\da-f]{3,8})$/i)?.[1]
@@ -1025,11 +1032,9 @@ function App() {
         const { bounds, snapshots } = drag
         const signX = drag.handle?.includes('w') ? -1 : 1
         const signY = drag.handle?.includes('n') ? -1 : 1
-        const width = Math.max(30, bounds.width + dx * signX)
-        const height = Math.max(30, bounds.height + dy * signY)
-        const scaleX = width / bounds.width
-        const scaleY = height / bounds.height
-        const scale = Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY
+        const width = bounds.width + dx * signX
+        const height = bounds.height + dy * signY
+        const scale = getProportionalResizeScale(bounds.width, bounds.height, width, height)
         const nextWidth = bounds.width * scale
         const nextHeight = bounds.height * scale
         const nextX = signX < 0 ? bounds.x + bounds.width - nextWidth : bounds.x
@@ -1057,16 +1062,23 @@ function App() {
           if (drag.mode === 'resize') {
           const signX = drag.handle?.includes('w') ? -1 : 1
           const signY = drag.handle?.includes('n') ? -1 : 1
-          let width = Math.max(30, drag.width + dx * signX)
-          let height = Math.max(30, drag.height + dy * signY)
-          if (shouldSnap) {
-            width = Math.max(30, Math.round(width / 24) * 24)
-            height = Math.max(30, Math.round(height / 24) * 24)
-          }
+          let width = drag.width + dx * signX
+          let height = drag.height + dy * signY
           if (item.proportionsLocked && drag.width > 0 && drag.height > 0) {
-            const ratio = drag.width / drag.height
-            if (Math.abs(width / drag.width - 1) >= Math.abs(height / drag.height - 1)) height = width / ratio
-            else width = height * ratio
+            let scale = getProportionalResizeScale(drag.width, drag.height, width, height)
+            if (shouldSnap) {
+              const snapBasis = Math.max(drag.width, drag.height)
+              scale = Math.max(30 / drag.width, 30 / drag.height, Math.round(snapBasis * scale / 24) * 24 / snapBasis)
+            }
+            width = drag.width * scale
+            height = drag.height * scale
+          } else {
+            width = Math.max(30, width)
+            height = Math.max(30, height)
+            if (shouldSnap) {
+              width = Math.max(30, Math.round(width / 24) * 24)
+              height = Math.max(30, Math.round(height / 24) * 24)
+            }
           }
             return { ...item, width, height, x: drag.handle?.includes('w') ? drag.x + drag.width - width : drag.x, y: drag.handle?.includes('n') ? drag.y + drag.height - height : drag.y }
           }
@@ -2309,7 +2321,7 @@ function App() {
               <div className="canvas-stage" style={{ '--canvas-background': canvasBackground, '--canvas-grid-image': 'none' } as React.CSSProperties}>
             <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
               {objects.filter((item) => isObjectEffectivelyVisible(objects, item)).map((item) => <g key={item.objectId} transform={`translate(${item.x + item.width / 2} ${item.y + item.height / 2}) rotate(${item.rotation}) scale(${item.flipX ? -1 : 1} ${item.flipY ? -1 : 1}) translate(${-item.width / 2} ${-item.height / 2})`} onPointerDown={(event) => startDrag(event, item)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!selectedIds.includes(item.objectId)) setSelectedIds([item.objectId]); setContextMenu({ x: event.clientX, y: event.clientY, objectId: item.objectId }) }} className={`canvas-object ${isObjectEffectivelyLocked(objects, item) ? 'locked' : ''}`} opacity={item.opacity}>
-                <rect x={0} y={0} width={item.width} height={item.height} fill="none" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="stroke" />
+                <rect x={0} y={0} width={item.width} height={item.height} fill="transparent" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="all" />
                 <CanvasObjectArtwork item={item} />
                 {selected.length === 1 && selectedIds.includes(item.objectId) && !item.isFrame && <g className="selection-box" pointerEvents="none"><rect x={0} y={0} width={item.width} height={item.height} fill="none" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" />{[[0, 0, 'nw'], [item.width, 0, 'ne'], [0, item.height, 'sw'], [item.width, item.height, 'se']].map(([x, y, handle]) => <rect key={String(handle)} className={`resize-handle handle-${handle}`} x={Number(x) - 4} y={Number(y) - 4} width={8} height={8} rx={1} fill="#fff" stroke="#8f78ff" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="all" onPointerDown={(event) => startDrag(event, item, 'resize', String(handle))} />)}</g>}
               </g>)}
