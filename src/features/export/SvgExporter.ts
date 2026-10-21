@@ -54,7 +54,48 @@ export function serializeComposition(objects: CanvasObject[], transparentBackgro
     wrapper.setAttribute('height', String(item.height))
     wrapper.setAttribute('viewBox', item.viewBox)
     const parsed = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${namespaceSvgIds(item.markup, item.objectId)}</svg>`, 'image/svg+xml')
-    for (const child of Array.from(parsed.documentElement.childNodes)) wrapper.append(document.importNode(child, true))
+    const artwork = Array.from(parsed.documentElement.childNodes).map((child) => document.importNode(child, true))
+    const erasures = item.erasures ?? []
+    if (erasures.length) {
+      const [viewX, viewY, viewWidth, viewHeight] = item.viewBox.trim().split(/[\s,]+/).map(Number)
+      const safeViewBox = [viewX, viewY, viewWidth, viewHeight].every(Number.isFinite) && viewWidth > 0 && viewHeight > 0
+        ? { x: viewX, y: viewY, width: viewWidth, height: viewHeight }
+        : { x: 0, y: 0, width: item.width, height: item.height }
+      const maskId = `pixo-eraser-${item.objectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+      const defs = document.createElementNS(root.namespaceURI, 'defs')
+      const mask = document.createElementNS(root.namespaceURI, 'mask')
+      mask.setAttribute('id', maskId)
+      mask.setAttribute('maskUnits', 'userSpaceOnUse')
+      mask.setAttribute('maskContentUnits', 'userSpaceOnUse')
+      mask.setAttribute('x', String(safeViewBox.x))
+      mask.setAttribute('y', String(safeViewBox.y))
+      mask.setAttribute('width', String(safeViewBox.width))
+      mask.setAttribute('height', String(safeViewBox.height))
+      const maskBackground = document.createElementNS(root.namespaceURI, 'rect')
+      maskBackground.setAttribute('x', String(safeViewBox.x))
+      maskBackground.setAttribute('y', String(safeViewBox.y))
+      maskBackground.setAttribute('width', String(safeViewBox.width))
+      maskBackground.setAttribute('height', String(safeViewBox.height))
+      maskBackground.setAttribute('fill', 'white')
+      mask.append(maskBackground)
+      for (const stroke of erasures) {
+        const path = document.createElementNS(root.namespaceURI, 'path')
+        path.setAttribute('d', stroke.d)
+        path.setAttribute('fill', 'none')
+        path.setAttribute('stroke', 'black')
+        path.setAttribute('stroke-width', String(stroke.strokeWidth))
+        path.setAttribute('stroke-linecap', 'round')
+        path.setAttribute('stroke-linejoin', 'round')
+        mask.append(path)
+      }
+      defs.append(mask)
+      const artworkGroup = document.createElementNS(root.namespaceURI, 'g')
+      artworkGroup.setAttribute('mask', `url(#${maskId})`)
+      artworkGroup.append(...artwork)
+      wrapper.append(defs, artworkGroup)
+    } else {
+      wrapper.append(...artwork)
+    }
     group.append(wrapper)
     root.append(group)
   }

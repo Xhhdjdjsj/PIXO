@@ -28,6 +28,10 @@ export interface CanvasObject extends SvgAsset {
   textContent?: string
   fontSize?: number
   fontFamily?: string
+  contentBoundsFitted?: boolean
+  contentBoundsVersion?: number
+  freehandPoints?: Array<{ x: number; y: number }>
+  erasures?: Array<{ id: string; d: string; strokeWidth: number }>
 }
 
 export interface DragState {
@@ -44,4 +48,5 @@ export interface DragState {
   snapshots?: Array<Pick<CanvasObject, 'objectId' | 'x' | 'y' | 'width' | 'height'>>
   bounds?: { x: number; y: number; width: number; height: number }
   moved?: boolean
+  selectOnClick?: string
 }

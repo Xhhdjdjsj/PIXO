@@ -12,6 +12,7 @@ import {
   Clipboard,
   Copy,
   Download,
+  Eraser,
   Eye,
   EyeOff,
   FileImage,
@@ -45,7 +46,7 @@ import {
 import type { CanvasObject, DragState, SvgAsset as Asset } from './types/svg'
 import type { Project } from './types/project'
 import { cleanSvg } from './features/svg-import/SvgSanitizer'
-import { extractSvgNode, getSvgStructure, measureSvgNodeBounds } from './features/svg-import/SvgStructure'
+import { extractSvgNode, getSvgStructure, measureSvgArtworkBounds, measureSvgNodeBounds } from './features/svg-import/SvgStructure'
 import { namespaceSvgIds, serializeComposition } from './features/export/SvgExporter'
 import { readWorkspaceValue, writeWorkspaceValue } from './features/storage/workspaceStorage'
 import type { SvgTreeNode } from './features/svg-import/SvgStructure'
@@ -212,6 +213,157 @@ function getObjectBounds(items: Pick<CanvasObject, 'x' | 'y' | 'width' | 'height
   const right = Math.max(...items.map((item) => item.x + item.width))
   const bottom = Math.max(...items.map((item) => item.y + item.height))
   return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
+function isCanvasPointInsideObject(point: IconPoint, item: CanvasObject) {
+  const centerX = item.x + item.width / 2
+  const centerY = item.y + item.height / 2
+  const angle = -(item.rotation * Math.PI) / 180
+  const dx = point.x - centerX
+  const dy = point.y - centerY
+  const localX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle)
+  const localY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle)
+  return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
+}
+
+function clipSegmentToRect(start: IconPoint, end: IconPoint, minX: number, minY: number, maxX: number, maxY: number) {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  let first = 0
+  let last = 1
+  for (const [p, q] of [[-dx, start.x - minX], [dx, maxX - start.x], [-dy, start.y - minY], [dy, maxY - start.y]]) {
+    if (p === 0) {
+      if (q < 0) return null
+      continue
+    }
+    const ratio = q / p
+    if (p < 0) first = Math.max(first, ratio)
+    else last = Math.min(last, ratio)
+    if (first > last) return null
+  }
+  return [
+    { x: start.x + dx * first, y: start.y + dy * first },
+    { x: start.x + dx * last, y: start.y + dy * last },
+  ] as const
+}
+
+function mapEraserSegmentToObject(item: CanvasObject, worldStart: IconPoint, worldEnd: IconPoint, size: number) {
+  if (item.isFrame || item.isGroup || !item.width || !item.height) return null
+  const viewBox = item.viewBox.trim().split(/[\s,]+/).map(Number)
+  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return null
+  const [viewX, viewY, viewWidth, viewHeight] = viewBox
+  const scale = Math.min(item.width / viewWidth, item.height / viewHeight)
+  if (!Number.isFinite(scale) || scale <= 0) return null
+  const offsetX = (item.width - viewWidth * scale) / 2
+  const offsetY = (item.height - viewHeight * scale) / 2
+  const centerX = item.width / 2
+  const centerY = item.height / 2
+  const angle = (item.rotation * Math.PI) / 180
+  const toLocal = (point: IconPoint) => {
+    const dx = point.x - item.x - centerX
+    const dy = point.y - item.y - centerY
+    const rotatedX = dx * Math.cos(angle) + dy * Math.sin(angle)
+    const rotatedY = -dx * Math.sin(angle) + dy * Math.cos(angle)
+    return {
+      x: centerX + rotatedX * (item.flipX ? -1 : 1),
+      y: centerY + rotatedY * (item.flipY ? -1 : 1),
+    }
+  }
+  const start = toLocal(worldStart)
+  const end = toLocal(worldEnd)
+  const clipped = clipSegmentToRect(start, end, offsetX, offsetY, offsetX + viewWidth * scale, offsetY + viewHeight * scale)
+  if (!clipped) return null
+  const toViewBox = (point: IconPoint) => ({ x: viewX + (point.x - offsetX) / scale, y: viewY + (point.y - offsetY) / scale })
+  const [a, b] = clipped.map(toViewBox)
+  return {
+    d: `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} L ${b.x.toFixed(2)} ${b.y.toFixed(2)}`,
+    strokeWidth: size / scale,
+  }
+}
+
+function fitSvgObjectToArtwork(item: CanvasObject): CanvasObject {
+  if ((item.contentBoundsVersion ?? 0) >= 6 || item.isFrame || item.isGroup || getAssetFileType(item.source) !== 'SVG') return item
+
+  const viewBox = item.viewBox.trim().split(/[\s,]+/).map(Number)
+  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return item
+  const [viewX, viewY, viewWidth, viewHeight] = viewBox
+  const renderableTags = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image', 'use'])
+  const bounds = getObjectBounds(getSvgStructure(item.markup)
+    .flatMap((node) => flattenSvgTree([node]))
+    .filter(({ node }) => renderableTags.has(node.tag))
+    .flatMap(({ node }) => {
+      const measured = measureSvgNodeBounds(item, node.path)
+      return measured ? [{ x: measured.x, y: measured.y, width: measured.width, height: measured.height }] : []
+    }))
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return item
+
+  const scale = Math.min(item.width / viewWidth, item.height / viewHeight)
+  if (!Number.isFinite(scale) || scale <= 0) return item
+  const viewportOffsetX = (item.width - viewWidth * scale) / 2
+  const viewportOffsetY = (item.height - viewHeight * scale) / 2
+  const contentX = viewportOffsetX + (bounds.x - viewX) * scale
+  const contentY = viewportOffsetY + (bounds.y - viewY) * scale
+  const contentWidth = bounds.width * scale
+  const contentHeight = bounds.height * scale
+  const oldCenterX = item.width / 2
+  const oldCenterY = item.height / 2
+  const localOffsetX = contentX + contentWidth / 2 - oldCenterX
+  const localOffsetY = contentY + contentHeight / 2 - oldCenterY
+  const flippedOffsetX = localOffsetX * (item.flipX ? -1 : 1)
+  const flippedOffsetY = localOffsetY * (item.flipY ? -1 : 1)
+  const angle = (item.rotation * Math.PI) / 180
+  const newCenterX = item.x + oldCenterX + flippedOffsetX * Math.cos(angle) - flippedOffsetY * Math.sin(angle)
+  const newCenterY = item.y + oldCenterY + flippedOffsetX * Math.sin(angle) + flippedOffsetY * Math.cos(angle)
+
+  return {
+    ...item,
+    x: newCenterX - contentWidth / 2,
+    y: newCenterY - contentHeight / 2,
+    width: contentWidth,
+    height: contentHeight,
+    viewBox: `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`,
+    contentBoundsFitted: true,
+    contentBoundsVersion: 4,
+  }
+}
+
+async function fitSvgObjectToVisibleArtwork(item: CanvasObject, backgroundColor = 'transparent'): Promise<CanvasObject> {
+  if ((item.contentBoundsVersion ?? 0) >= 6 || item.isFrame || item.isGroup || getAssetFileType(item.source) !== 'SVG') return item
+  // Measure the source markup in its current viewBox. Geometric fitting first
+  // can clip SVGs whose bounds are reported incorrectly by getBBox().
+  const fitted = { ...item, contentBoundsVersion: 0 }
+  const bounds = await measureSvgArtworkBounds(fitted, backgroundColor)
+  if (!bounds) return { ...fitted, contentBoundsVersion: 6 }
+
+  const viewBox = fitted.viewBox.trim().split(/[\s,]+/).map(Number)
+  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return { ...fitted, contentBoundsVersion: 6 }
+  const [viewX, viewY, viewWidth, viewHeight] = viewBox
+  const scale = Math.min(fitted.width / viewWidth, fitted.height / viewHeight)
+  if (!Number.isFinite(scale) || scale <= 0) return { ...fitted, contentBoundsVersion: 6 }
+  const offsetX = (fitted.width - viewWidth * scale) / 2
+  const offsetY = (fitted.height - viewHeight * scale) / 2
+  const contentX = offsetX + (bounds.x - viewX) * scale
+  const contentY = offsetY + (bounds.y - viewY) * scale
+  const contentWidth = bounds.width * scale
+  const contentHeight = bounds.height * scale
+  const localOffsetX = contentX + contentWidth / 2 - fitted.width / 2
+  const localOffsetY = contentY + contentHeight / 2 - fitted.height / 2
+  const flippedOffsetX = localOffsetX * (fitted.flipX ? -1 : 1)
+  const flippedOffsetY = localOffsetY * (fitted.flipY ? -1 : 1)
+  const angle = (fitted.rotation * Math.PI) / 180
+  const centerX = fitted.x + fitted.width / 2 + flippedOffsetX * Math.cos(angle) - flippedOffsetY * Math.sin(angle)
+  const centerY = fitted.y + fitted.height / 2 + flippedOffsetX * Math.sin(angle) + flippedOffsetY * Math.cos(angle)
+
+  return {
+    ...fitted,
+    x: centerX - contentWidth / 2,
+    y: centerY - contentHeight / 2,
+    width: contentWidth,
+    height: contentHeight,
+    viewBox: `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`,
+    contentBoundsFitted: true,
+    contentBoundsVersion: 6,
+  }
 }
 
 function getCanvasBackgroundForTheme(background: string | undefined, theme: 'light' | 'dark') {
@@ -390,6 +542,31 @@ function keepSourceObjects(objects: CanvasObject[], assets: Asset[]) {
 
 function getAssetFileType(source: string) {
   return /\.(?:png|jpe?g|webp|gif|avif)$/i.test(source) ? 'Image' : 'SVG'
+}
+
+function canAutoSeparateImportedSvg(asset: Asset) {
+  return getAssetFileType(asset.source) === 'SVG'
+    && Boolean(asset.imported || asset.sourceFileId)
+    && !asset.id.startsWith('service-')
+}
+
+function createSvgPartsGroup(root: CanvasObject, parts: CanvasObject[]) {
+  const bounds = getObjectBounds(parts)
+  if (parts.length < 2 || !bounds) return null
+  const groupId = makeId()
+  const group: CanvasObject = {
+    ...root,
+    id: groupId,
+    objectId: groupId,
+    name: `${root.name.replace(/ group$/i, '')} group`,
+    category: 'Group',
+    ...bounds,
+    markup: '',
+    isFrame: true,
+    isGroup: true,
+    frameId: root.frameId,
+  }
+  return { group, parts: parts.map((part) => ({ ...part, frameId: groupId })) }
 }
 
 const svgDefinitionTags = new Set(['defs', 'mask', 'clippath', 'filter', 'pattern', 'lineargradient', 'radialgradient', 'marker'])
@@ -641,6 +818,8 @@ function App() {
   const [iconName, setIconName] = useState('my-icon')
   const [iconTool, setIconTool] = useState<IconTool>('rectangle')
   const [iconColor, setIconColor] = useState(() => readStored('pixo-drawing-color', '#7049f5'))
+  const [penSize, setPenSize] = useState(6)
+  const [eraserSize, setEraserSize] = useState(28)
   const [iconText, setIconText] = useState('')
   const [iconShapes, setIconShapes] = useState<IconShape[]>([])
   const [iconPreview, setIconPreview] = useState<IconShape | null>(null)
@@ -648,7 +827,7 @@ function App() {
   const [canvasTextDraft, setCanvasTextDraft] = useState<{ x: number; y: number; value: string } | null>(null)
   const [canvasTextFontSize, setCanvasTextFontSize] = useState(42)
   const [canvasTextFontFamily, setCanvasTextFontFamily] = useState('sans-serif')
-  const [canvasDrawing, setCanvasDrawing] = useState<{ kind: 'rect' | 'ellipse' | 'path'; start: IconPoint; current: IconPoint; points: IconPoint[] } | null>(null)
+  const [canvasDrawing, setCanvasDrawing] = useState<{ kind: 'rect' | 'ellipse' | 'path' | 'erase'; start: IconPoint; current: IconPoint; points: IconPoint[] } | null>(null)
   const [showHelp, setShowHelp] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
@@ -692,6 +871,7 @@ function App() {
   const languageControlRef = useRef<HTMLDivElement>(null)
   const assetSortControlRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<SVGSVGElement>(null)
+  const eraserCursorRef = useRef<SVGCircleElement>(null)
   const iconCanvasRef = useRef<SVGSVGElement>(null)
   const iconDrawRef = useRef<{ start: IconPoint; tool: IconTool } | null>(null)
   const snapToGridRef = useRef(snapToGrid)
@@ -699,7 +879,14 @@ function App() {
   const resolvedThemeRef = useRef(resolvedTheme)
   const dragRef = useRef<DragState | null>(null)
   const selectionDragRef = useRef<{ startX: number; startY: number } | null>(null)
-  const canvasDrawRef = useRef<{ kind: 'rect' | 'ellipse' | 'path'; start: IconPoint; points: IconPoint[] } | null>(null)
+  const canvasDrawRef = useRef<{ kind: 'rect' | 'ellipse' | 'path' | 'erase'; start: IconPoint; points: IconPoint[] } | null>(null)
+  const eraserStrokeIdRef = useRef<string | null>(null)
+  const eraserBaseObjectsRef = useRef<CanvasObject[] | null>(null)
+  const eraserPointsRef = useRef<IconPoint[]>([])
+  const eraserProcessedPointCountRef = useRef(0)
+  const eraserFrameRef = useRef<number | null>(null)
+  const eraserHistoryStartedRef = useRef(false)
+  const eraserStrokeSizeRef = useRef(28)
   const suppressCanvasClickRef = useRef(false)
   const panRef = useRef<{ startX: number; startY: number; centerX: number; centerY: number } | null>(null)
   const panelResizeRef = useRef<{ panel: 'library' | 'inspector'; startX: number; width: number } | null>(null)
@@ -716,7 +903,7 @@ function App() {
   }
   const selected = objects.filter((item) => selectedIds.includes(item.objectId))
   const selectedBounds = getObjectBounds(selected.flatMap((item) => item.isGroup
-    ? getFrameDescendants(objects, item.objectId).filter((child) => !child.isFrame)
+    ? getFrameDescendants(objects, item.objectId).filter((child) => !child.isFrame && isObjectEffectivelyVisible(objects, child))
     : [item]))
   const current = selected.length === 1 ? selected[0] : undefined
   const canUngroupSelection = selected.length === 1 && Boolean(selected[0].isFrame && objects.some((item) => item.frameId === selected[0].objectId))
@@ -786,6 +973,10 @@ function App() {
   }, [objects])
 
   useEffect(() => {
+    if (activeTool !== 'Eraser') eraserCursorRef.current?.setAttribute('display', 'none')
+  }, [activeTool])
+
+  useEffect(() => {
     let cancelled = false
     async function hydrateWorkspace() {
       const legacyAssets = readStored<Asset[]>('pixo-library-assets', [])
@@ -809,14 +1000,38 @@ function App() {
           return serviceAsset ? { ...asset, name: serviceAsset.name, markup: serviceAsset.markup } : asset
         })
       const nextActiveId = storedActiveId ?? legacyActiveId
-      const normalizeObjects = (items: CanvasObject[]) => putFrameHitTargetsBehindContents(
-        fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(keepSourceObjects(items, nextAssets), nextAssets), nextAssets)),
+      const projectSource = storedProjects ?? legacyProjects
+      const backgroundForProject = (project?: Project) => getCanvasBackgroundForTheme(
+        project?.backgroundColor ?? (project ? undefined : canvasBackground),
+        resolvedThemeRef.current,
       )
-      const nextObjects = normalizeObjects(storedObjects ?? legacyObjects)
-      const nextProjects = (storedProjects ?? legacyProjects).map((project) => ({
+      const normalizeObjects = async (items: CanvasObject[], backgroundColor: string) => {
+        const restoredObjects = await restoreLegacyImportedSvgRuns(keepSourceObjects(items, nextAssets), nextAssets, backgroundColor)
+        const sourceObjects = restoredObjects.flatMap((item) => {
+          if (item.isFrame || item.frameId) return [item]
+          const sourceAsset = nextAssets.find((asset) => asset.id === item.id && asset.source === item.source)
+          if (!sourceAsset || !canAutoSeparateImportedSvg(sourceAsset) || item.name !== sourceAsset.name) return [item]
+          const separated = buildSvgGroupParts(item)
+          const grouped = separated ? createSvgPartsGroup(item, separated.parts) : null
+          return grouped ? [grouped.group, ...grouped.parts] : [item]
+        })
+        const fittedObjects: CanvasObject[] = []
+        for (let index = 0; index < sourceObjects.length; index += 4) {
+          const batch = await Promise.all(sourceObjects.slice(index, index + 4).map((item) =>
+            item.isFrame || getAssetFileType(item.source) !== 'SVG' ? item : fitSvgObjectToVisibleArtwork(item, backgroundColor),
+          ))
+          fittedObjects.push(...batch)
+        }
+        return putFrameHitTargetsBehindContents(
+          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(fittedObjects, nextAssets), nextAssets)),
+        )
+      }
+      const activeProjectData = projectSource.find((project) => project.id === nextActiveId)
+      const nextObjects = await normalizeObjects(storedObjects ?? legacyObjects, backgroundForProject(activeProjectData))
+      const nextProjects = await Promise.all(projectSource.map(async (project) => ({
         ...project,
-        objects: project.id === nextActiveId ? nextObjects : normalizeObjects(project.objects ?? []),
-      }))
+        objects: project.id === nextActiveId ? nextObjects : await normalizeObjects(project.objects ?? [], backgroundForProject(project)),
+      })))
       await Promise.all([
         writeWorkspaceValue('assets', nextAssets),
         writeWorkspaceValue('objects', nextObjects),
@@ -1097,6 +1312,8 @@ function App() {
       })
     }
     const onPointerUp = () => {
+      const drag = dragRef.current
+      if (drag && !drag.moved && drag.selectOnClick) setSelectedIds([drag.selectOnClick])
       dragRef.current = null
       selectionDragRef.current = null
       panelResizeRef.current = null
@@ -1363,36 +1580,46 @@ function App() {
   function buildSvgGroupParts(root: CanvasObject, granularity: 'logical' | 'primitive' = 'logical'): { group?: CanvasObject; parts: CanvasObject[] } | null {
     const renderableTags = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image', 'use'])
     const structure = getSvgStructure(root.markup)
+    const isLogicalNode = (node: SvgTreeNode) => renderableTags.has(node.tag)
+      || (node.tag === 'g' || node.tag === 'symbol') && flattenSvgTree(node.children).some(({ node: child }) => renderableTags.has(child.tag))
+    let logicalNodes = structure.filter(isLogicalNode).map((node) => ({ node, depth: 0 }))
+    while (logicalNodes.length === 1 && (logicalNodes[0].node.tag === 'g' || logicalNodes[0].node.tag === 'symbol')) {
+      const children = logicalNodes[0].node.children.filter(isLogicalNode).map((node) => ({ node, depth: 1 }))
+      if (!children.length) break
+      logicalNodes = children
+    }
     const nodes = (granularity === 'primitive'
       ? flattenSvgTree(structure).filter(({ node }) => node.children.length === 0 && renderableTags.has(node.tag))
-      : structure.map((node) => ({ node, depth: 0 })).filter(({ node }) => renderableTags.has(node.tag)
-        || (node.tag === 'g' || node.tag === 'symbol') && flattenSvgTree(node.children).some(({ node: child }) => renderableTags.has(child.tag))))
-      .slice(0, 200)
+      : logicalNodes).slice(0, 200)
     if (nodes.length < 2) return null
     const values = root.viewBox.trim().split(/[\s,]+/).map(Number)
     const [viewX, viewY, viewWidth, viewHeight] = values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0
       ? values
       : [0, 0, root.width, root.height]
-    const scaleX = root.width / viewWidth
-    const scaleY = root.height / viewHeight
+    const fitScale = Math.min(root.width / viewWidth, root.height / viewHeight)
+    const viewportOffsetX = (root.width - viewWidth * fitScale) / 2
+    const viewportOffsetY = (root.height - viewHeight * fitScale) / 2
     const groupId = granularity === 'primitive' ? makeId() : null
     const parts = nodes.flatMap(({ node }, index) => {
       const markup = extractSvgNode(root, node.path)
       if (!markup) return []
-      const bounds = measureSvgNodeBounds(root, node.path) ?? { x: viewX, y: viewY, width: viewWidth, height: viewHeight }
+      const measuredBounds = measureSvgNodeBounds(root, node.path)
+      const bounds = measuredBounds ?? { x: viewX, y: viewY, width: viewWidth, height: viewHeight }
       const label = node.tag === 'g' && /^obj-[\w-]+$/.test(node.label) ? `Group ${index + 1}` : node.label
       return [{
         ...root,
         objectId: makeId(),
         name: `${root.name} · ${label || `Object ${index + 1}`}`,
-        x: root.x + (bounds.x - viewX) * scaleX,
-        y: root.y + (bounds.y - viewY) * scaleY,
-        width: bounds.width * scaleX,
-        height: bounds.height * scaleY,
+        x: root.x + viewportOffsetX + (bounds.x - viewX) * fitScale,
+        y: root.y + viewportOffsetY + (bounds.y - viewY) * fitScale,
+        width: bounds.width * fitScale,
+        height: bounds.height * fitScale,
         viewBox: `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`,
         markup,
         frameId: groupId ?? root.frameId,
         isFrame: false,
+        contentBoundsFitted: Boolean(measuredBounds),
+        contentBoundsVersion: measuredBounds ? 4 : undefined,
       }]
     })
     if (parts.length < 2) return null
@@ -1416,7 +1643,122 @@ function App() {
     return { group, parts }
   }
 
-  function addAsset(asset: Asset, at?: { x: number; y: number }) {
+  async function restoreLegacyImportedSvgRuns(items: CanvasObject[], assets: Asset[], backgroundColor: string) {
+    const restored: CanvasObject[] = []
+    let index = 0
+    while (index < items.length) {
+      const item = items[index]
+      const asset = !item.isFrame && !item.frameId && (item.imported || item.sourceFileId)
+        ? assets.find((candidate) => candidate.id === item.id && candidate.source === item.source)
+        : undefined
+      if (!asset || getAssetFileType(asset.source) !== 'SVG' || !item.name.startsWith(`${asset.name} · `)) {
+        restored.push(item)
+        index += 1
+        continue
+      }
+
+      const scale = Math.min(290 / asset.width, 290 / asset.height)
+      if (!Number.isFinite(scale) || scale <= 0) {
+        restored.push(item)
+        index += 1
+        continue
+      }
+      const seed: CanvasObject = {
+        ...asset,
+        objectId: makeId(),
+        x: 0,
+        y: 0,
+        width: asset.width * scale,
+        height: asset.height * scale,
+        rotation: 0,
+        opacity: 1,
+        visible: true,
+        locked: false,
+        proportionsLocked: true,
+      }
+      const expected = buildSvgGroupParts(seed)?.parts.map(fitSvgObjectToArtwork)
+      if (!expected?.length) {
+        restored.push(item)
+        index += 1
+        continue
+      }
+
+      const run: CanvasObject[] = []
+      while (index + run.length < items.length) {
+        const candidate = items[index + run.length]
+        if (candidate.isFrame || candidate.frameId || candidate.id !== item.id || candidate.source !== item.source) break
+        run.push(candidate)
+      }
+
+      let offset = 0
+      while (offset < run.length) {
+        const batch = run.slice(offset, offset + expected.length)
+        if (batch.length !== expected.length) {
+          restored.push(...batch)
+          offset += batch.length
+          continue
+        }
+
+        const signature = (part: CanvasObject) => `${part.name}\u0000${part.markup}`
+        const expectedBySignature = new Map<string, CanvasObject[]>()
+        expected.forEach((part) => expectedBySignature.set(signature(part), [...(expectedBySignature.get(signature(part)) ?? []), part]))
+        const matched = new Map<string, CanvasObject[]>()
+        batch.forEach((part) => matched.set(signature(part), [...(matched.get(signature(part)) ?? []), part]))
+        const matchesOriginal = batch.every((part) => part.name.startsWith(`${asset.name} · `)
+          && part.visible
+          && !part.locked
+          && part.opacity === 1
+          && (part.rotation ?? 0) === 0
+          && !part.flipX
+          && !part.flipY
+          && !part.erasures?.length)
+          && expected.length === batch.length
+          && [...expectedBySignature].every(([key, parts]) => matched.get(key)?.length === parts.length)
+          && [...matched.keys()].every((key) => expectedBySignature.has(key))
+
+        if (matchesOriginal) {
+          const pairs = expected.flatMap((original) => {
+            const actual = matched.get(signature(original))?.shift()
+            return actual ? [{ original, actual }] : []
+          })
+          const fitAxis = (coordinate: 'x' | 'y', size: 'width' | 'height') => {
+            const expectedCenters = pairs.map(({ original }) => original[coordinate] + original[size] / 2)
+            const actualCenters = pairs.map(({ actual }) => actual[coordinate] + actual[size] / 2)
+            const expectedMean = expectedCenters.reduce((sum, value) => sum + value, 0) / expectedCenters.length
+            const actualMean = actualCenters.reduce((sum, value) => sum + value, 0) / actualCenters.length
+            const variance = expectedCenters.reduce((sum, value) => sum + (value - expectedMean) ** 2, 0)
+            const covariance = pairs.reduce((sum, _, pairIndex) => sum
+              + (expectedCenters[pairIndex] - expectedMean) * (actualCenters[pairIndex] - actualMean), 0)
+            const sizeRatios = pairs.map(({ original, actual }) => actual[size] / original[size])
+              .filter((ratio) => Number.isFinite(ratio) && ratio > 0)
+              .sort((left, right) => left - right)
+            const fallbackScale = sizeRatios[Math.floor(sizeRatios.length / 2)] ?? 1
+            const fittedScale = variance > 0.001 ? covariance / variance : fallbackScale
+            const scale = Number.isFinite(fittedScale) && fittedScale > 0 ? fittedScale : fallbackScale
+            return Number.isFinite(scale) && scale > 0 ? { scale, offset: actualMean - scale * expectedMean } : null
+          }
+          const xFit = fitAxis('x', 'width')
+          const yFit = fitAxis('y', 'height')
+          if (xFit && yFit) {
+            const recovered = {
+              ...seed,
+              objectId: makeId(),
+              x: xFit.offset,
+              y: yFit.offset,
+              width: seed.width * xFit.scale,
+              height: seed.height * yFit.scale,
+            }
+            restored.push(await fitSvgObjectToVisibleArtwork(recovered, backgroundColor))
+          } else restored.push(...batch)
+        } else restored.push(...batch)
+        offset += batch.length
+      }
+      index += run.length
+    }
+    return restored
+  }
+
+  async function addAsset(asset: Asset, at?: { x: number; y: number }) {
     const scale = Math.min(290 / asset.width, 290 / asset.height)
     const width = asset.width * scale
     const height = asset.height * scale
@@ -1425,11 +1767,23 @@ function App() {
       width, height, rotation: 0, opacity: 1, visible: true, locked: false,
       proportionsLocked: true,
     }
-    const separated = asset.imported && getAssetFileType(asset.source) === 'SVG' ? buildSvgGroupParts(next) : null
-    commit(separated ? [...objectsRef.current, ...(separated.group ? [separated.group] : []), ...separated.parts] : [...objectsRef.current, next])
-    setSelectedIds([separated?.group?.objectId ?? separated?.parts[0]?.objectId ?? next.objectId])
+    const fitted = await fitSvgObjectToVisibleArtwork(next, canvasBackground)
+    if (canAutoSeparateImportedSvg(asset)) {
+      const separated = buildSvgGroupParts(fitted)
+      const grouped = separated ? createSvgPartsGroup(fitted, separated.parts) : null
+      if (grouped) {
+        commit([...objectsRef.current, grouped.group, ...grouped.parts])
+        setSelectedIds([grouped.group.objectId])
+        setActiveTool('Select')
+        setToast(`${asset.name} added with ${grouped.parts.length} movable objects`)
+        if (window.matchMedia('(max-width: 680px)').matches) setMobilePanel(null)
+        return grouped.group
+      }
+    }
+    commit([...objectsRef.current, fitted])
+    setSelectedIds([fitted.objectId])
     setActiveTool('Select')
-    setToast(separated ? `${asset.name} added as ${separated.parts.length} objects` : `${asset.name} added to canvas`)
+    setToast(`${asset.name} added to canvas`)
     if (window.matchMedia('(max-width: 680px)').matches) setMobilePanel(null)
     return next
   }
@@ -1559,15 +1913,15 @@ function App() {
     return { x: local.x, y: local.y }
   }
 
-  function addCanvasSvg(name: string, markup: string, x: number, y: number, width: number, height: number, category = 'Objects', textOptions?: Pick<CanvasObject, 'textContent' | 'fontSize' | 'fontFamily'>) {
+  function addCanvasSvg(name: string, markup: string, x: number, y: number, width: number, height: number, category = 'Objects', textOptions?: Pick<CanvasObject, 'textContent' | 'fontSize' | 'fontFamily'>, selectAfterAdd = true, freehandPoints?: CanvasObject['freehandPoints']) {
     const id = makeId()
     const item: CanvasObject = {
       id, objectId: id, name, category, width, height, viewBox: `0 0 ${width} ${height}`,
       markup, source: 'PIXO', x, y, rotation: 0, opacity: 1, visible: true, locked: false,
-      proportionsLocked: true, ...textOptions,
+      proportionsLocked: true, contentBoundsFitted: true, contentBoundsVersion: 4, ...textOptions, ...(freehandPoints ? { freehandPoints } : {}),
     }
     commit([...objectsRef.current, item])
-    setSelectedIds([id])
+    setSelectedIds(selectAfterAdd ? [id] : [])
     return item
   }
 
@@ -1584,8 +1938,71 @@ function App() {
     setCanvasTextDraft(null)
   }
 
+  function applyPendingEraserSegments() {
+    const strokeId = eraserStrokeIdRef.current
+    const points = eraserPointsRef.current
+    if (!strokeId || !points.length) return
+    const segments: Array<[IconPoint, IconPoint]> = []
+    const processed = eraserProcessedPointCountRef.current
+    if (processed === 0) segments.push([points[0], points[0]])
+    for (let index = Math.max(1, processed); index < points.length; index += 1) segments.push([points[index - 1], points[index]])
+    eraserProcessedPointCountRef.current = points.length
+    if (!segments.length) return
+
+    const additions = new Map<string, { d: string; strokeWidth: number }>()
+    const currentObjects = objectsRef.current
+    const eraserSize = eraserStrokeSizeRef.current
+    for (const [start, end] of segments) {
+      for (const item of currentObjects) {
+        if (item.isFrame || item.isGroup || item.locked || !isObjectEffectivelyVisible(currentObjects, item)) continue
+        const clippedStroke = mapEraserSegmentToObject(item, start, end, eraserSize)
+        if (!clippedStroke) continue
+        const pending = additions.get(item.objectId)
+        additions.set(item.objectId, {
+          d: `${pending?.d ?? ''} ${clippedStroke.d}`.trim(),
+          strokeWidth: clippedStroke.strokeWidth,
+        })
+      }
+    }
+    if (!additions.size) return
+
+    let changed = false
+    const next = currentObjects.map((item) => {
+      const addition = additions.get(item.objectId)
+      if (!addition) return item
+      const existing = item.erasures?.find((stroke) => stroke.id === strokeId)
+      if (existing?.d === addition.d && existing.strokeWidth === addition.strokeWidth) return item
+      changed = true
+      return {
+        ...item,
+        erasures: [
+          ...(item.erasures ?? []).filter((stroke) => stroke.id !== strokeId),
+          { id: strokeId, d: `${existing?.d ?? ''} ${addition.d}`.trim(), strokeWidth: addition.strokeWidth },
+        ],
+      }
+    })
+    if (!changed) return
+    if (!eraserHistoryStartedRef.current) {
+      pushHistory(eraserBaseObjectsRef.current ?? currentObjects)
+      eraserHistoryStartedRef.current = true
+    }
+    const fitted = fitFrameBounds(next)
+    objectsRef.current = fitted
+    setObjects(fitted)
+    setSaved(false)
+  }
+
+  function scheduleEraserUpdate(points: IconPoint[]) {
+    eraserPointsRef.current = points
+    if (eraserFrameRef.current !== null) return
+    eraserFrameRef.current = window.requestAnimationFrame(() => {
+      eraserFrameRef.current = null
+      applyPendingEraserSegments()
+    })
+  }
+
   function startCanvasTool(event: React.PointerEvent<SVGSVGElement>) {
-    if (activeTool === 'Select' || activeTool === 'Pan') return
+    if (!['Rectangle', 'Ellipse', 'Pen', 'Eraser', 'Text'].includes(activeTool)) return
     event.preventDefault()
     event.stopPropagation()
     const start = canvasPoint(event.clientX, event.clientY)
@@ -1593,21 +2010,45 @@ function App() {
       setCanvasTextDraft({ ...start, value: '' })
       return
     }
-    const kind = activeTool === 'Pen' ? 'path' : activeTool === 'Ellipse' ? 'ellipse' : 'rect'
+    const kind = activeTool === 'Pen' ? 'path' : activeTool === 'Eraser' ? 'erase' : activeTool === 'Ellipse' ? 'ellipse' : 'rect'
     canvasDrawRef.current = { kind, start, points: [start] }
-    setCanvasDrawing({ kind, start, current: start, points: [start] })
+    if (kind === 'erase') {
+      eraserStrokeIdRef.current = makeId()
+      eraserBaseObjectsRef.current = objectsRef.current.map((item) => ({ ...item, erasures: item.erasures?.map((stroke) => ({ ...stroke })) }))
+      eraserPointsRef.current = [start]
+      eraserProcessedPointCountRef.current = 0
+      eraserHistoryStartedRef.current = false
+      eraserStrokeSizeRef.current = eraserSize
+      applyPendingEraserSegments()
+    } else {
+      setCanvasDrawing({ kind, start, current: start, points: [start] })
+    }
     canvasRef.current?.setPointerCapture(event.pointerId)
   }
 
   function moveCanvasTool(event: React.PointerEvent<SVGSVGElement>) {
+    const cursor = eraserCursorRef.current
+    if (activeTool === 'Eraser') {
+      const pointer = canvasPoint(event.clientX, event.clientY)
+      cursor?.setAttribute('cx', String(pointer.x))
+      cursor?.setAttribute('cy', String(pointer.y))
+      cursor?.setAttribute('r', String(eraserSize / 2))
+      cursor?.setAttribute('display', 'inline')
+    } else {
+      cursor?.setAttribute('display', 'none')
+    }
     const drawing = canvasDrawRef.current
     if (!drawing) return
     const current = canvasPoint(event.clientX, event.clientY)
-    const points = drawing.kind === 'path'
+    const points = (drawing.kind === 'path' || drawing.kind === 'erase')
       && Math.hypot(current.x - drawing.points[drawing.points.length - 1].x, current.y - drawing.points[drawing.points.length - 1].y) >= 2
       ? [...drawing.points, current]
       : drawing.points
     canvasDrawRef.current = { ...drawing, points }
+    if (drawing.kind === 'erase') {
+      if (points !== drawing.points) scheduleEraserUpdate(points)
+      return
+    }
     setCanvasDrawing({ ...drawing, current, points })
   }
 
@@ -1615,15 +2056,29 @@ function App() {
     const drawing = canvasDrawRef.current
     if (!drawing) return
     const end = canvasPoint(event.clientX, event.clientY)
-    if (drawing.kind === 'path') {
+    if (drawing.kind === 'erase') {
+      const points = Math.hypot(end.x - drawing.points[drawing.points.length - 1].x, end.y - drawing.points[drawing.points.length - 1].y) > 0
+        ? [...drawing.points, end]
+        : drawing.points
+      if (eraserFrameRef.current !== null) window.cancelAnimationFrame(eraserFrameRef.current)
+      eraserFrameRef.current = null
+      eraserPointsRef.current = points
+      applyPendingEraserSegments()
+      eraserStrokeIdRef.current = null
+      eraserBaseObjectsRef.current = null
+      eraserPointsRef.current = []
+      eraserProcessedPointCountRef.current = 0
+      eraserHistoryStartedRef.current = false
+    } else if (drawing.kind === 'path') {
       const points = [...drawing.points, end]
       if (points.length > 1) {
-        const left = Math.min(...points.map((point) => point.x))
-        const top = Math.min(...points.map((point) => point.y))
-        const width = Math.max(1, Math.max(...points.map((point) => point.x)) - left)
-        const height = Math.max(1, Math.max(...points.map((point) => point.y)) - top)
+        const strokePadding = penSize / 2
+        const left = Math.min(...points.map((point) => point.x)) - strokePadding
+        const top = Math.min(...points.map((point) => point.y)) - strokePadding
+        const width = Math.max(1, Math.max(...points.map((point) => point.x)) - left + strokePadding)
+        const height = Math.max(1, Math.max(...points.map((point) => point.y)) - top + strokePadding)
         const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${(point.x - left).toFixed(2)} ${(point.y - top).toFixed(2)}`).join(' ')
-        addCanvasSvg('Path', `<path d="${path}" fill="none" stroke="${iconColor}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>`, left, top, width, height)
+        addCanvasSvg('Path', `<path d="${path}" fill="none" stroke="${iconColor}" stroke-width="${penSize}" stroke-linecap="round" stroke-linejoin="round"/>`, left, top, width, height, 'Pen stroke', undefined, false, points.map((point) => ({ x: point.x - left, y: point.y - top })))
       }
     } else {
       const left = Math.min(drawing.start.x, end.x)
@@ -1648,6 +2103,8 @@ function App() {
       setActiveNav('Components')
     } else if (name === 'Layers') {
       setInspectorTab('Layers')
+    } else if (name === 'Pen' || name === 'Eraser' || name === 'Text') {
+      setInspectorTab('Inspector')
     } else if (name === 'Pan') {
       setToast('Drag to move the canvas')
     }
@@ -1669,17 +2126,10 @@ function App() {
     const clickedHandle = event.target instanceof Element && event.target.closest('.resize-handle')
     if (activeTool === 'Select' && event.button === 0 && !clickedObject && !clickedHandle) {
       const point = canvasPoint(event.clientX, event.clientY)
-      const hitObject = [...objects].reverse().find((item) => {
+      const hitObject = [...objects].reverse().filter((item) => {
         if (item.isFrame || isObjectEffectivelyLocked(objects, item) || !isObjectEffectivelyVisible(objects, item)) return false
-        const centerX = item.x + item.width / 2
-        const centerY = item.y + item.height / 2
-        const angle = -(item.rotation * Math.PI) / 180
-        const dx = point.x - centerX
-        const dy = point.y - centerY
-        const localX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle)
-        const localY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle)
-        return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
-      })
+        return isCanvasPointInsideObject(point, item)
+      }).sort((left, right) => Math.abs(left.width * left.height) - Math.abs(right.width * right.height))[0]
       if (hitObject) {
         startDrag(event, hitObject)
         return
@@ -1692,7 +2142,7 @@ function App() {
       event.currentTarget.setPointerCapture(event.pointerId)
       return
     }
-    if (event.button === 0 && !clickedObject && !clickedHandle && selectedIds.length) {
+    if ((activeTool === 'Select' || activeTool === 'Layers') && event.button === 0 && !clickedObject && !clickedHandle && selectedIds.length) {
       suppressCanvasClickRef.current = false
       setSelectedIds([])
       return
@@ -1949,18 +2399,36 @@ function App() {
   }
 
   function startDrag(event: React.PointerEvent<SVGElement>, item: CanvasObject, mode: DragState['mode'] = 'move', handle?: string) {
-    const frameAncestors = getFrameAncestors(objects, item)
-    const moveIndividual = event.altKey && mode === 'move'
-    const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId))
-    const groupAncestor = moveIndividual || mode !== 'move' ? undefined : frameAncestors.find((ancestor) => ancestor.isGroup)
-    const dragFrameAncestor = selectedFrameAncestor ?? groupAncestor
-    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, item)) return
+    let dragItem = item
+    let selectOnClick: string | undefined
+    if (!event.altKey && mode === 'move' && !selectedIds.includes(item.objectId)) {
+      const point = canvasPoint(event.clientX, event.clientY)
+      const selectedUnderPointer = [...objects].reverse().find((candidate) => selectedIds.includes(candidate.objectId)
+        && candidate.objectId !== item.objectId
+        && !candidate.isFrame
+        && !isObjectEffectivelyLocked(objects, candidate)
+        && isObjectEffectivelyVisible(objects, candidate)
+        && isCanvasPointInsideObject(point, candidate))
+      if (selectedUnderPointer) {
+        dragItem = selectedUnderPointer
+        selectOnClick = item.objectId
+      }
+    }
+    if (event.altKey && mode === 'move') {
+      const point = canvasPoint(event.clientX, event.clientY)
+      const overlapStack = [...objects].reverse().filter((candidate) => !candidate.isFrame
+        && !isObjectEffectivelyLocked(objects, candidate)
+        && isObjectEffectivelyVisible(objects, candidate)
+        && isCanvasPointInsideObject(point, candidate))
+      const currentIndex = overlapStack.findIndex((candidate) => candidate.objectId === item.objectId)
+      dragItem = overlapStack[currentIndex + 1] ?? (currentIndex === -1 ? overlapStack[0] : undefined) ?? item
+    }
+    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
     event.stopPropagation()
-    const clickedSelection = selectedIds.includes(item.objectId) || Boolean(dragFrameAncestor)
-    if (!event.shiftKey && !clickedSelection) setSelectedIds([item.objectId])
-    if (!event.shiftKey && groupAncestor && !selectedFrameAncestor) setSelectedIds([groupAncestor.objectId])
+    const clickedSelection = selectedIds.includes(dragItem.objectId)
+    if (!event.shiftKey && !clickedSelection) setSelectedIds([dragItem.objectId])
     if (event.shiftKey) {
-      setSelectedIds((ids) => ids.includes(item.objectId) ? ids.filter((id) => id !== item.objectId) : [...ids, item.objectId])
+      setSelectedIds((ids) => ids.includes(dragItem.objectId) ? ids.filter((id) => id !== dragItem.objectId) : [...ids, dragItem.objectId])
       return
     }
     const point = canvasRef.current?.createSVGPoint()
@@ -1968,10 +2436,9 @@ function App() {
     point.x = event.clientX
     point.y = event.clientY
     const local = point.matrixTransform(canvasRef.current.getScreenCTM()?.inverse())
-    // Group members select and drag their nearest group unless Alt is held.
-    const movingSelection = dragFrameAncestor
-      ? [dragFrameAncestor]
-      : clickedSelection ? selected : [item]
+    // Drag the actual child hit by the pointer, even when its parent frame is selected.
+    // The frame itself still moves as a unit when its empty area is dragged.
+    const movingSelection = clickedSelection ? selected : [dragItem]
     const dragItems = movingSelection.flatMap((selectedItem) => selectedItem.isFrame
       ? [selectedItem, ...getFrameDescendants(objects, selectedItem.objectId)]
       : [selectedItem])
@@ -1982,8 +2449,9 @@ function App() {
       : dragItems
     const bounds = getObjectBounds(boundsItems) ?? getObjectBounds(dragItems) ?? undefined
     dragRef.current = {
-      id: item.objectId, mode, handle, startX: local.x, startY: local.y,
-      x: item.x, y: item.y, width: item.width, height: item.height,
+      id: dragItem.objectId, mode, handle, startX: local.x, startY: local.y,
+      x: dragItem.x, y: dragItem.y, width: dragItem.width, height: dragItem.height,
+      selectOnClick,
       objectIds: dragItems.map((selectedItem) => selectedItem.objectId),
       snapshots: dragItems.map(({ objectId, x, y, width, height }) => ({ objectId, x, y, width, height })),
       bounds,
@@ -2282,8 +2750,9 @@ function App() {
           <button title="Library" aria-label="Library" aria-pressed={activeRailItem === 'Library'} className={`tool-button ${activeRailItem === 'Library' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Library'); setActiveNav('Components'); setActiveRailItem('Library'); setMobilePanel('library') }}><Shapes size={17} /></button>
           <button title="Rectangle" aria-label="Rectangle" aria-pressed={activeTool === 'Rectangle'} className={`tool-button ${activeTool === 'Rectangle' ? 'selected' : ''}`} onClick={() => setActiveTool('Rectangle')}><Square size={17} /></button>
           <button title="Ellipse" aria-label="Ellipse" aria-pressed={activeTool === 'Ellipse'} className={`tool-button ${activeTool === 'Ellipse' ? 'selected' : ''}`} onClick={() => setActiveTool('Ellipse')}><Circle size={17} /></button>
-          <button title="Pen" aria-label="Pen" aria-pressed={activeTool === 'Pen'} className={`tool-button ${activeTool === 'Pen' ? 'selected' : ''}`} onClick={() => setActiveTool('Pen')}><Pencil size={17} /></button>
-          <button title="Text" aria-label="Text" aria-pressed={activeTool === 'Text'} className={`tool-button ${activeTool === 'Text' ? 'selected' : ''}`} onClick={() => setActiveTool('Text')}><Type size={17} /></button>
+          <button title="Pen" aria-label="Pen" aria-pressed={activeTool === 'Pen'} className={`tool-button ${activeTool === 'Pen' ? 'selected' : ''}`} onClick={() => activateTool('Pen')}><Pencil size={17} /></button>
+          <button title="Eraser" aria-label="Eraser" aria-pressed={activeTool === 'Eraser'} className={`tool-button ${activeTool === 'Eraser' ? 'selected' : ''}`} onClick={() => activateTool('Eraser')}><Eraser size={17} /></button>
+          <button title="Text" aria-label="Text" aria-pressed={activeTool === 'Text'} className={`tool-button ${activeTool === 'Text' ? 'selected' : ''}`} onClick={() => activateTool('Text')}><Type size={17} /></button>
           <button title="Layers" aria-label="Layers" aria-pressed={activeRailItem === 'Layers'} className={`tool-button ${activeRailItem === 'Layers' ? 'selected' : ''}`} onClick={() => { setInspectorTab('Layers'); setActiveTool('Layers'); setActiveRailItem('Layers'); setMobilePanel('inspector') }}><Layers size={17} /></button>
           <button title="Files" aria-label="Files" aria-pressed={activeRailItem === 'Files'} className={`tool-button ${activeRailItem === 'Files' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Files'); setActiveRailItem('Files'); setMobilePanel('library') }}><FileImage size={17} /></button>
           <button title="Assets" aria-label="Assets" aria-pressed={activeRailItem === 'Assets'} className={`tool-button ${activeRailItem === 'Assets' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Assets'); setActiveNav('Assets'); setActiveRailItem('Assets'); setMobilePanel('library') }}><Grid2X2 size={17} /></button>
@@ -2312,14 +2781,14 @@ function App() {
             <section className="imported-files-area">
               <div className="section-heading"><span>Imported files</span><button onClick={() => setLibraryTab('Files')}>View all</button></div>
               <div className="imported-list">
-            {importedFiles.map((asset) => <div className="source-file-entry" key={asset.id}><button className="file-row" title="Add the whole source as one object" onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{getAssetFileType(asset.source)} · {Math.round(asset.width)} × {Math.round(asset.height)}</small></span><ArrowRight size={13} /></button><button className={`inspect-source-button ${expandedSourceId === asset.id ? 'active' : ''}`} title="Inspect SVG structure" aria-label={`Inspect ${asset.source}`} onClick={() => setExpandedSourceId((id) => id === asset.id ? null : asset.id)}><Layers size={13} /></button>{expandedSourceId === asset.id && <div className="svg-tree-panel"><div className="svg-tree-heading"><span>SVG structure</span><small>{translateRussian(`${expandedNodes.length} elements`, language)}</small></div>{expandedNodes.length ? expandedNodes.map(({ node, depth }) => <div className="svg-tree-row" key={node.path.join('-')} style={{ paddingLeft: `${7 + depth * 12}px` }}><span className="svg-tree-node"><code>{node.tag}</code><span>{node.label}</span></span><button title={`Extract ${node.label}`} aria-label={`Extract ${node.label}`} onClick={() => extractComponent(asset, node)}>Extract</button></div>) : <p className="svg-tree-empty">No extractable SVG elements found.</p>}</div>}</div>)}
+            {importedFiles.map((asset) => <div className="source-file-entry" key={asset.id}><button className="file-row" title={canAutoSeparateImportedSvg(asset) ? 'Add SVG as separate movable objects when possible' : 'Add the source to the canvas'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{getAssetFileType(asset.source)} · {Math.round(asset.width)} × {Math.round(asset.height)}</small></span><ArrowRight size={13} /></button><button className={`inspect-source-button ${expandedSourceId === asset.id ? 'active' : ''}`} title="Inspect SVG structure" aria-label={`Inspect ${asset.source}`} onClick={() => setExpandedSourceId((id) => id === asset.id ? null : asset.id)}><Layers size={13} /></button>{expandedSourceId === asset.id && <div className="svg-tree-panel"><div className="svg-tree-heading"><span>SVG structure</span><small>{translateRussian(`${expandedNodes.length} elements`, language)}</small></div>{expandedNodes.length ? expandedNodes.map(({ node, depth }) => <div className="svg-tree-row" key={node.path.join('-')} style={{ paddingLeft: `${7 + depth * 12}px` }}><span className="svg-tree-node"><code>{node.tag}</code><span>{node.label}</span></span><button title={`Extract ${node.label}`} aria-label={`Extract ${node.label}`} onClick={() => extractComponent(asset, node)}>Extract</button></div>) : <p className="svg-tree-empty">No extractable SVG elements found.</p>}</div>}</div>)}
                 {customAssets.length === 0 && <button className="file-row sample-file" onClick={() => fileInput.current?.click()}><span className="file-thumb sample-thumb"><Sparkles size={19} /></span><span className="file-info"><b>Import your first SVG</b><small>Drop a file or browse</small></span><Plus size={13} /></button>}
               </div>
             </section>
           </> : <div className="files-view">
             <div className="section-heading"><span>{libraryTab === 'Files' ? 'Source files' : 'Project assets'}</span><button title={libraryTab === 'Assets' ? 'Create SVG icon' : 'Import SVG'} aria-label={libraryTab === 'Assets' ? 'Create SVG icon' : 'Import SVG'} onClick={() => libraryTab === 'Assets' ? openIconEditor('rectangle') : fileInput.current?.click()}>{libraryTab === 'Assets' ? <Pencil size={13} /> : <Plus size={13} />}</button></div>
             <button className="import-drop" onClick={() => fileInput.current?.click()}><Download size={18} /><b>Import files</b><span>SVG or photo · Up to 5 MB</span></button>
-            {(libraryTab === 'Files' ? importedFiles : customAssets).map((asset) => <button className="file-row" key={asset.id} title="Add the whole source as one object" onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{asset.category} · {getAssetFileType(asset.source)}</small></span><ArrowRight size={13} /></button>)}
+            {(libraryTab === 'Files' ? importedFiles : customAssets).map((asset) => <button className="file-row" key={asset.id} title={canAutoSeparateImportedSvg(asset) ? 'Add SVG as separate movable objects when possible' : 'Add the source to the canvas'} onClick={() => addAsset(asset)}><span className="file-thumb"><svg viewBox={assetThumbnail(asset).viewBox} dangerouslySetInnerHTML={{ __html: assetThumbnail(asset).markup }} /></span><span className="file-info"><b>{asset.source}</b><small>{asset.category} · {getAssetFileType(asset.source)}</small></span><ArrowRight size={13} /></button>)}
             {(libraryTab === 'Files' ? importedFiles : customAssets).length === 0 && <p className="empty-note">Your imported SVGs will appear here.</p>}
           </div>}
           <button className="library-collapse" title="Collapse library" aria-label="Collapse library" onClick={() => setLibraryCollapsed(true)}><ChevronRight size={13} /></button>
@@ -2342,7 +2811,7 @@ function App() {
             <button className="canvas-action" title="Canvas settings" onClick={() => setInspectorTab('Inspector')}><Settings2 size={15} /></button>
           </div>
               <div className="canvas-stage" style={{ '--canvas-background': canvasBackground, '--canvas-grid-image': 'none' } as React.CSSProperties}>
-            <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
+            <svg ref={canvasRef} className={`composition-svg ${activeTool === 'Pan' ? 'pan-mode' : ''} ${isPanning ? 'pan-dragging' : ''} ${activeTool === 'Select' ? '' : 'frame-mode'}`} viewBox={viewBox} onWheel={handleCanvasWheel} onPointerDown={handleCanvasPointerDown} onPointerMove={moveCanvasTool} onPointerUp={finishCanvasTool} onPointerCancel={finishCanvasTool} onPointerLeave={() => { if (!canvasDrawRef.current) eraserCursorRef.current?.setAttribute('display', 'none') }} onClick={handleCanvasClick} onContextMenu={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY }) } }}>
               {objects.filter((item) => isObjectEffectivelyVisible(objects, item)).map((item) => <g key={item.objectId} transform={`translate(${item.x + item.width / 2} ${item.y + item.height / 2}) rotate(${item.rotation}) scale(${item.flipX ? -1 : 1} ${item.flipY ? -1 : 1}) translate(${-item.width / 2} ${-item.height / 2})`} onPointerDown={(event) => startDrag(event, item)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!selectedIds.includes(item.objectId)) setSelectedIds([item.objectId]); setContextMenu({ x: event.clientX, y: event.clientY, objectId: item.objectId }) }} className={`canvas-object ${isObjectEffectivelyLocked(objects, item) ? 'locked' : ''}`} opacity={item.opacity}>
                 <rect x={0} y={0} width={item.width} height={item.height} fill="transparent" stroke="transparent" strokeWidth={6} vectorEffect="non-scaling-stroke" pointerEvents="all" />
                 <CanvasObjectArtwork item={item} />
@@ -2350,7 +2819,8 @@ function App() {
               </g>)}
               {canvasDrawing?.kind === 'rect' && <rect className="frame-preview" x={Math.min(canvasDrawing.start.x, canvasDrawing.current.x)} y={Math.min(canvasDrawing.start.y, canvasDrawing.current.y)} width={Math.abs(canvasDrawing.current.x - canvasDrawing.start.x)} height={Math.abs(canvasDrawing.current.y - canvasDrawing.start.y)} />}
               {canvasDrawing?.kind === 'ellipse' && <ellipse className="frame-preview" cx={(canvasDrawing.start.x + canvasDrawing.current.x) / 2} cy={(canvasDrawing.start.y + canvasDrawing.current.y) / 2} rx={Math.abs(canvasDrawing.current.x - canvasDrawing.start.x) / 2} ry={Math.abs(canvasDrawing.current.y - canvasDrawing.start.y) / 2} />}
-              {canvasDrawing?.kind === 'path' && canvasDrawing.points.length > 1 && <path d={canvasDrawing.points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} fill="none" stroke={iconColor} strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}
+              {canvasDrawing?.kind === 'path' && canvasDrawing.points.length > 1 && <path d={canvasDrawing.points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} fill="none" stroke={iconColor} strokeWidth={penSize} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}
+              <circle ref={eraserCursorRef} className="eraser-preview" cx={0} cy={0} r={eraserSize / 2} display="none" pointerEvents="none" />
               {canvasTextDraft && <><text x={canvasTextDraft.x} y={canvasTextDraft.y} fill={iconColor} fontFamily={canvasTextFontFamily} fontSize={canvasTextFontSize} fontWeight="600" pointerEvents="none">{canvasTextDraft.value}</text><rect x={canvasTextDraft.x + canvasTextDraftWidth - 10} y={canvasTextDraft.y - canvasTextFontSize} width="1.5" height={canvasTextFontSize * 1.06} fill={iconColor} pointerEvents="none" /><foreignObject x={canvasTextDraft.x} y={canvasTextDraft.y - canvasTextFontSize - 4} width={canvasTextDraftWidth} height={Math.max(38, canvasTextFontSize * 1.35)}><input className="canvas-text-editor" autoFocus style={{ caretColor: 'transparent', fontSize: canvasTextFontSize, fontFamily: canvasTextFontFamily }} value={canvasTextDraft.value} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setCanvasTextDraft((draft) => draft ? { ...draft, value: event.target.value } : null)} onBlur={commitCanvasText} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } if (event.key === 'Escape') { setCanvasTextDraft(null); setActiveTool('Select') } }} /></foreignObject></>}
             </svg>
             {(selected.length > 1 || selected.some((item) => item.isFrame) || selectionRect) && <svg className="selection-overlay" viewBox={viewBox}>
@@ -2373,6 +2843,9 @@ function App() {
           <div className="panel-tabs inspector-tabs"><button className={inspectorTab === 'Inspector' ? 'active' : ''} onClick={() => setInspectorTab('Inspector')}>Properties</button><button className={inspectorTab === 'Layers' ? 'active' : ''} onClick={() => setInspectorTab('Layers')}>Layers</button><button className="panel-collapse" title="Collapse properties" aria-label="Collapse properties" onClick={() => setInspectorCollapsed(true)}><ChevronRight size={13} /></button></div>
           {inspectorTab === 'Inspector' ? <div className="inspector-content">
             <InspectorSection title="Document"><ChevronRight size={13} /><div className="field-grid"><NumericField label="W" value={canvasWidth} onChange={(value) => updateCanvasDimension('width', value)} /><NumericField label="H" value={canvasHeight} onChange={(value) => updateCanvasDimension('height', value)} /></div><ColorPicker label="Background" value={canvasBackground} onChangeStart={() => undefined} onChange={(color) => { setCanvasBackground(colorToHex(parseColor(color))); setSaved(false) }} onChangeEnd={() => undefined} /></InspectorSection>
+            {activeTool === 'Pen' && <InspectorSection title={language === 'ru' ? 'Карандаш' : 'Pen'}><ChevronRight size={13} /><label className="opacity-label"><span>{language === 'ru' ? 'Размер' : 'Size'}</span><span>{penSize}px</span></label><input className="opacity-slider tool-size-slider" type="range" min="1" max="40" step="1" value={penSize} aria-label={language === 'ru' ? 'Размер карандаша' : 'Pen size'} onChange={(event) => setPenSize(Number(event.target.value))} /></InspectorSection>}
+            {activeTool === 'Eraser' && <InspectorSection title={language === 'ru' ? 'Ластик' : 'Eraser'}><ChevronRight size={13} /><label className="opacity-label"><span>{language === 'ru' ? 'Размер' : 'Size'}</span><span>{eraserSize}px</span></label><input className="opacity-slider tool-size-slider" type="range" min="4" max="120" step="1" value={eraserSize} aria-label={language === 'ru' ? 'Размер ластика' : 'Eraser size'} onChange={(event) => setEraserSize(Number(event.target.value))} /></InspectorSection>}
+            {activeTool === 'Text' && (current?.category !== 'Text' || canvasTextDraft !== null) && <InspectorSection title={language === 'ru' ? 'Текст по умолчанию' : 'Default text'}><ChevronRight size={13} /><TextControls language={language} fontFamily={canvasTextFontFamily} fontSize={canvasTextFontSize} onFontFamily={setCanvasTextFontFamily} onFontSize={setCanvasTextFontSize} /></InspectorSection>}
             {current ? <>
               <InspectorSection title="Transform"><ChevronRight size={13} />
                 <div className="transform-align-row"><button title="Align left" onClick={() => alignSelected('left')}>↤</button><button title="Align horizontal center" onClick={() => alignSelected('center')}>↔</button><button title="Align right" onClick={() => alignSelected('right')}>↦</button><button title="Align top" onClick={() => alignSelected('top')}>↥</button><button title="Align vertical center" onClick={() => alignSelected('middle')}>↕</button><button title="Align bottom" onClick={() => alignSelected('bottom')}>↧</button></div>
@@ -2384,18 +2857,18 @@ function App() {
                 <ColorPicker label="Fill" value={getSvgPaint(current.markup, 'fill')} onChangeStart={beginColorEdit} onChange={(color) => updateSelectedPaint('fill', color)} onChangeEnd={finishColorEdit} />
                 <ColorPicker label="Stroke" value={getSvgPaint(current.markup, 'stroke')} onChangeStart={beginColorEdit} onChange={(color) => updateSelectedPaint('stroke', color)} onChangeEnd={finishColorEdit} />
               </InspectorSection>
-              {current.category === 'Text' && <InspectorSection title="Text"><ChevronRight size={13} /><TextControls fontFamily={current.fontFamily ?? 'sans-serif'} fontSize={current.fontSize ?? Number(current.markup.match(/font-size="([\d.]+)/)?.[1] ?? 42)} onFontFamily={(fontFamily) => updateTextStyle({ fontFamily })} onFontSize={(fontSize) => updateTextStyle({ fontSize })} /></InspectorSection>}
+              {current.category === 'Text' && <InspectorSection title={language === 'ru' ? 'Выбранный текст' : 'Selected text'}><ChevronRight size={13} /><TextControls language={language} fontFamily={current.fontFamily ?? 'sans-serif'} fontSize={current.fontSize ?? Number(current.markup.match(/font-size="([\d.]+)/)?.[1] ?? 42)} onFontFamily={(fontFamily) => updateTextStyle({ fontFamily })} onFontSize={(fontSize) => updateTextStyle({ fontSize })} /></InspectorSection>}
               <InspectorSection title="Object"><ChevronRight size={13} />
                 <label className="inspector-field"><span>Name</span><input value={current.name} onChange={(event) => updateObjects((items) => items.map((item) => item.objectId === current.objectId ? { ...item, name: event.target.value } : item))} /></label>
                 <label className="inspector-field"><span>Type</span><input value={getAssetFileType(current.source) === 'Image' ? 'Image' : 'SVG group'} readOnly /></label>
                 <label className="inspector-field"><span>Source</span><input value={current.source} readOnly /></label>
                 <div className="object-actions">{current.isFrame && objects.some((item) => item.frameId === current.objectId) ? <button onClick={ungroupSelected}><Layers size={13} />Ungroup</button> : !current.isFrame && (current.imported || current.sourceFileId) ? <button onClick={separateSelectedSvg}><Layers size={13} />Separate into group</button> : null}<button onClick={duplicateSelected}><Copy size={13} />Duplicate</button><button className="delete-action" onClick={deleteSelected}><Trash2 size={13} />Delete</button></div>
               </InspectorSection>
-            </> : canvasTextDraft ? <InspectorSection title="Text"><ChevronRight size={13} /><TextControls fontFamily={canvasTextFontFamily} fontSize={canvasTextFontSize} onFontFamily={setCanvasTextFontFamily} onFontSize={setCanvasTextFontSize} /></InspectorSection> : <>
+            </> : <>
               {selected.length > 1 && <InspectorSection title="Transform"><ChevronRight size={13} />
                 <div className="transform-align-row"><button title="Align left" onClick={() => alignSelected('left')}>↤</button><button title="Align horizontal center" onClick={() => alignSelected('center')}>↔</button><button title="Align right" onClick={() => alignSelected('right')}>↦</button><button title="Align top" onClick={() => alignSelected('top')}>↥</button><button title="Align vertical center" onClick={() => alignSelected('middle')}>↕</button><button title="Align bottom" onClick={() => alignSelected('bottom')}>↧</button></div>
               </InspectorSection>}
-              <div className="empty-inspector">{selected.length > 1 ? <span>{translateRussian(`${selected.length} selected`, language)}</span> : <><MousePointer2 size={19} /><span>Select an object to inspect its properties.</span></>}</div>
+              {selected.length > 1 ? <div className="empty-inspector"><span>{translateRussian(`${selected.length} selected`, language)}</span></div> : !['Pen', 'Eraser', 'Text'].includes(activeTool) && <div className="empty-inspector"><MousePointer2 size={19} /><span>Select an object to inspect its properties.</span></div>}
             </>}
             <InspectorSection title="Canvas"><ChevronRight size={13} /><label className="inspector-field"><span>Zoom</span><input value={`${Math.round(zoom * 100)}%`} readOnly /></label><button className="canvas-option" aria-pressed={snapToGrid} onClick={toggleSnapToGrid}><span>Snap to grid</span><span className={`toggle ${snapToGrid ? 'is-on' : ''}`}><i /></span></button></InspectorSection>
           </div> : <div className="layer-list-panel">
@@ -2501,7 +2974,20 @@ const CanvasObjectArtwork = memo(function CanvasObjectArtwork({ item }: { item: 
   const markup = useMemo(() => namespaceSvgIds(item.markup, item.objectId), [item.markup, item.objectId])
   if (item.isGroup) return null
   if (item.isFrame) return <rect className="canvas-frame" x={0} y={0} width={item.width} height={item.height} fill="transparent" pointerEvents="all" />
-  return <svg x={0} y={0} width={item.width} height={item.height} viewBox={item.viewBox} preserveAspectRatio="xMidYMid meet" dangerouslySetInnerHTML={{ __html: markup }} />
+  const erasures = item.erasures ?? []
+  if (!erasures.length) return <svg x={0} y={0} width={item.width} height={item.height} viewBox={item.viewBox} preserveAspectRatio="xMidYMid meet" dangerouslySetInnerHTML={{ __html: markup }} />
+  const [viewX, viewY, viewWidth, viewHeight] = item.viewBox.trim().split(/[\s,]+/).map(Number)
+  const safeViewBox = [viewX, viewY, viewWidth, viewHeight].every(Number.isFinite) && viewWidth > 0 && viewHeight > 0
+    ? { x: viewX, y: viewY, width: viewWidth, height: viewHeight }
+    : { x: 0, y: 0, width: item.width, height: item.height }
+  const maskId = `pixo-eraser-${item.objectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  return <svg x={0} y={0} width={item.width} height={item.height} viewBox={item.viewBox} preserveAspectRatio="xMidYMid meet">
+    <defs><mask id={maskId} maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x={safeViewBox.x} y={safeViewBox.y} width={safeViewBox.width} height={safeViewBox.height}>
+      <rect x={safeViewBox.x} y={safeViewBox.y} width={safeViewBox.width} height={safeViewBox.height} fill="white" />
+      {erasures.map((stroke) => <path key={stroke.id} d={stroke.d} fill="none" stroke="black" strokeWidth={stroke.strokeWidth} strokeLinecap="round" strokeLinejoin="round" />)}
+    </mask></defs>
+    <g mask={`url(#${maskId})`} dangerouslySetInnerHTML={{ __html: markup }} />
+  </svg>
 })
 
 function ProjectCanvasPreview({ project, language }: { project: Project; language: 'en' | 'ru' }) {
@@ -2524,8 +3010,7 @@ function ObjectTypeIcon({ item }: { item: CanvasObject }) {
 }
 
 const LayerObjectThumbnail = memo(function LayerObjectThumbnail({ item }: { item: CanvasObject }) {
-  const markup = useMemo(() => namespaceSvgIds(item.markup, item.objectId), [item.markup, item.objectId])
-  return <svg className="layer-thumbnail" viewBox={item.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" dangerouslySetInnerHTML={{ __html: markup }} />
+  return <svg className="layer-thumbnail" viewBox={item.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true"><CanvasObjectArtwork item={item} /></svg>
 })
 
 function ColorPicker({ label, value, onChange, onChangeStart, onChangeEnd, compact = false }: { label: string; value: string; onChange: (color: string) => void; onChangeStart: () => void; onChangeEnd: () => void; compact?: boolean }) {
@@ -2675,8 +3160,8 @@ function NumericField({ label, value, suffix, onChange }: { label: string; value
   return <label className="numeric-field">{label && <span>{label}</span>}<input type="text" inputMode="decimal" value={draft ?? formattedValue} onFocus={() => { initialDraft.current = formattedValue; setDraft(formattedValue) }} onChange={(event) => { const next = normalizeDraft(event.target.value); setDraft(next); const parsed = parseDraft(next); if (parsed !== null) onChange(parsed) }} onBlur={commitDraft} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') event.currentTarget.blur() }} /><small>{suffix}</small></label>
 }
 
-function TextControls({ fontFamily, fontSize, onFontFamily, onFontSize }: { fontFamily: string; fontSize: number; onFontFamily: (fontFamily: string) => void; onFontSize: (fontSize: number) => void }) {
-  return <div className="text-controls"><label className="typography-control typography-font"><span>Font</span><select value={fontFamily} onChange={(event) => onFontFamily(event.target.value)}><option value="sans-serif">Sans serif</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="monospace">Monospace</option><option value="serif">Serif</option></select></label><div className="typography-control typography-size"><span>Size</span><NumericField label="" value={fontSize} suffix="px" onChange={onFontSize} /></div></div>
+function TextControls({ language, fontFamily, fontSize, onFontFamily, onFontSize }: { language: 'en' | 'ru'; fontFamily: string; fontSize: number; onFontFamily: (fontFamily: string) => void; onFontSize: (fontSize: number) => void }) {
+  return <div className="text-controls"><label className="typography-control typography-font"><span>{language === 'ru' ? 'Шрифт' : 'Font'}</span><select value={fontFamily} onChange={(event) => onFontFamily(event.target.value)}><option value="sans-serif">{language === 'ru' ? 'Без засечек' : 'Sans serif'}</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="monospace">{language === 'ru' ? 'Моноширинный' : 'Monospace'}</option><option value="serif">{language === 'ru' ? 'С засечками' : 'Serif'}</option></select></label><div className="typography-control typography-size"><span>{language === 'ru' ? 'Размер' : 'Size'}</span><NumericField label="" value={fontSize} suffix="px" onChange={onFontSize} /></div></div>
 }
 
 function InspectorSection({ title, children }: { title: string; children: React.ReactNode }) {

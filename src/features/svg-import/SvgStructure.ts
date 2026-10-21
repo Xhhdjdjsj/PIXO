@@ -100,7 +100,7 @@ export function measureSvgNodeBounds(asset: SvgAsset, path: number[]) {
   root.style.position = 'fixed'
   root.style.left = '-10000px'
   root.style.top = '0'
-  root.style.opacity = '0'
+  root.style.opacity = '1'
   root.style.pointerEvents = 'none'
   document.body.append(root)
 
@@ -112,8 +112,30 @@ export function measureSvgNodeBounds(asset: SvgAsset, path: number[]) {
       element = child
     }
 
+    let ancestor: Element | null = element
+    while (ancestor && ancestor !== root) {
+      const ancestorStyle = getComputedStyle(ancestor)
+      if (ancestorStyle.display === 'none' || ancestorStyle.visibility === 'hidden' || ancestorStyle.visibility === 'collapse' || Number(ancestorStyle.opacity) === 0) return null
+      ancestor = ancestor.parentElement
+    }
+
+    const computedStyle = getComputedStyle(element)
+    const hasFill = computedStyle.fill !== 'none'
+      && Number.parseFloat(computedStyle.fillOpacity) > 0
+      && !/rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/i.test(computedStyle.fill)
+    const hasStroke = computedStyle.stroke !== 'none'
+      && !/rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/i.test(computedStyle.stroke)
+      && Number.parseFloat(computedStyle.strokeWidth) > 0
+      && Number.parseFloat(computedStyle.strokeOpacity) > 0
+    if (!hasFill && !hasStroke && element.localName !== 'image') return null
+
     const graphicsElement = element as SVGGraphicsElement
-    const bounds = graphicsElement.getBBox()
+    let bounds: DOMRect
+    try {
+      bounds = (graphicsElement.getBBox as (options?: { clipped?: boolean }) => DOMRect).call(graphicsElement, { clipped: true })
+    } catch {
+      bounds = graphicsElement.getBBox()
+    }
     const elementMatrix = graphicsElement.getScreenCTM()
     const rootMatrix = root.getScreenCTM()
     if (!elementMatrix || !rootMatrix || bounds.width <= 0 || bounds.height <= 0) return null
@@ -129,11 +151,83 @@ export function measureSvgNodeBounds(asset: SvgAsset, path: number[]) {
     const top = Math.min(...corners.map((point) => point.y))
     const right = Math.max(...corners.map((point) => point.x))
     const bottom = Math.max(...corners.map((point) => point.y))
-    const padding = Math.max(0.5, Math.min(viewBoxWidth, viewBoxHeight) * 0.005)
+    const relativeMatrix = rootInverse.multiply(elementMatrix)
+    const transformScale = Math.max(Math.hypot(relativeMatrix.a, relativeMatrix.b), Math.hypot(relativeMatrix.c, relativeMatrix.d))
+    const strokeWidth = hasStroke ? Number.parseFloat(computedStyle.strokeWidth) : 0
+    const strokePadding = Number.isFinite(strokeWidth) ? strokeWidth * transformScale / 2 : 0
+    const padding = Math.max(0.5, Math.min(viewBoxWidth, viewBoxHeight) * 0.005, strokePadding)
     return { x: left - padding, y: top - padding, width: right - left + padding * 2, height: bottom - top + padding * 2 }
   } catch {
     return null
   } finally {
     root.remove()
+  }
+}
+
+export async function measureSvgArtworkBounds(asset: SvgAsset, backgroundColor = 'transparent') {
+  const viewBox = asset.viewBox.trim().split(/[\s,]+/).map(Number)
+  if (viewBox.length !== 4 || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return null
+  const [viewX, viewY, viewWidth, viewHeight] = viewBox
+  const rasterScale = Math.min(1024 / viewWidth, 1024 / viewHeight)
+  const width = Math.max(1, Math.ceil(viewWidth * rasterScale))
+  const height = Math.max(1, Math.ceil(viewHeight * rasterScale))
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="${viewBox.join(' ')}" preserveAspectRatio="none">${asset.markup}</svg>`
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+
+  try {
+    const image = new Image()
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('Could not render SVG artwork'))
+      image.src = url
+    })
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) return null
+    if (backgroundColor === 'transparent') context.clearRect(0, 0, width, height)
+    else {
+      context.fillStyle = backgroundColor
+      context.fillRect(0, 0, width, height)
+    }
+    // Capture the canvas color before drawing the SVG. Sampling afterward can
+    // mistake artwork touching the top-left corner for the page background.
+    const background = context.getImageData(0, 0, 1, 1).data
+    context.drawImage(image, 0, 0, width, height)
+    const pixels = context.getImageData(0, 0, width, height).data
+    let left = width
+    let top = height
+    let right = -1
+    let bottom = -1
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const pixel = (y * width + x) * 4
+        if (pixels[pixel + 3] < 8) continue
+        const colorDistance = Math.abs(pixels[pixel] - background[0])
+          + Math.abs(pixels[pixel + 1] - background[1])
+          + Math.abs(pixels[pixel + 2] - background[2])
+        if (colorDistance < 24) continue
+        left = Math.min(left, x)
+        top = Math.min(top, y)
+        right = Math.max(right, x)
+        bottom = Math.max(bottom, y)
+      }
+    }
+    if (right < left || bottom < top) return null
+    left = Math.max(0, left - 1)
+    top = Math.max(0, top - 1)
+    right = Math.min(width, right + 2)
+    bottom = Math.min(height, bottom + 2)
+    return {
+      x: viewX + left / width * viewWidth,
+      y: viewY + top / height * viewHeight,
+      width: (right - left) / width * viewWidth,
+      height: (bottom - top) / height * viewHeight,
+    }
+  } catch {
+    return null
+  } finally {
+    URL.revokeObjectURL(url)
   }
 }
