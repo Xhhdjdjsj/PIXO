@@ -1,4 +1,4 @@
-import { Children, memo, startTransition, useEffect, useMemo, useRef, useState } from 'react'
+import { Children, memo, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowRight,
@@ -182,6 +182,13 @@ function readStored<T>(key: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function getInitialThemeMode(): ThemeMode {
+  const saved = readStored<ThemeMode | null>('pixo-interface-theme-v3', null)
+  if (saved === 'system' || saved === 'light' || saved === 'dark') return saved
+  const previous = readStored<ThemeMode>('pixo-interface-theme-v2', 'dark')
+  return previous === 'system' ? 'dark' : previous
 }
 
 function flattenSvgTree(nodes: SvgTreeNode[], depth = 0): Array<{ node: SvgTreeNode; depth: number }> {
@@ -641,7 +648,7 @@ function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [profileName, setProfileName] = useState(() => readStored('pixo-profile-name', 'Mira'))
   const [snapToGrid, setSnapToGrid] = useState(() => readStored('pixo-snap-to-grid', false))
-  const [interfaceTheme, setInterfaceTheme] = useState<ThemeMode>(() => readStored('pixo-interface-theme-v2', 'system'))
+  const [interfaceTheme, setInterfaceTheme] = useState<ThemeMode>(getInitialThemeMode)
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const resolvedTheme = interfaceTheme === 'system' ? systemTheme : interfaceTheme
   const [canvasBackground, setCanvasBackground] = useState(() => {
@@ -887,6 +894,7 @@ function App() {
     localStorage.setItem('pixo-snap-to-grid', JSON.stringify(snapToGrid))
     localStorage.setItem('pixo-interface-theme', JSON.stringify(interfaceTheme))
     localStorage.setItem('pixo-interface-theme-v2', JSON.stringify(interfaceTheme))
+    localStorage.setItem('pixo-interface-theme-v3', JSON.stringify(interfaceTheme))
     localStorage.setItem('pixo-language', JSON.stringify(language))
     document.documentElement.style.colorScheme = resolvedTheme
     document.documentElement.lang = language
@@ -1831,7 +1839,9 @@ function App() {
     setShowProjects(true)
     setActiveNav('Projects')
   }
-  openLastProjectFromLandingRef.current = openLastProjectFromLanding
+  useLayoutEffect(() => {
+    openLastProjectFromLandingRef.current = openLastProjectFromLanding
+  })
 
   useEffect(() => {
     if (!storageReady || !pendingLandingOpenRef.current) return
@@ -1842,8 +1852,14 @@ function App() {
   useEffect(() => {
     function handleLandingMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin || event.source !== landingFrameRef.current?.contentWindow) return
-      if ((event.data as { type?: string } | null)?.type !== 'pixo:open-editor') return
-      openLastProjectFromLandingRef.current()
+      const message = event.data as { type?: string; theme?: unknown } | null
+      if (message?.type === 'pixo:open-editor') {
+        openLastProjectFromLandingRef.current()
+        return
+      }
+      if (message?.type === 'pixo:set-theme' && (message.theme === 'light' || message.theme === 'dark')) {
+        setInterfaceTheme(message.theme)
+      }
     }
     window.addEventListener('message', handleLandingMessage)
     return () => window.removeEventListener('message', handleLandingMessage)

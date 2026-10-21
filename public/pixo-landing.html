@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru" data-theme="light">
+<html lang="ru" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f7f7fb" />
+  <meta name="theme-color" content="#111016" />
   <meta name="description" content="Pixo — рабочее пространство для извлечения, хранения и сборки SVG-компонентов." />
   <title>Pixo — SVG в компоненты. Компоненты в идеи.</title>
   <style>
@@ -53,6 +53,14 @@
     .nav-links a { transition: color .2s ease; }
     .nav-links a:hover { color: var(--purple); }
     .nav-actions { display: flex; align-items: center; gap: 18px; }
+    .theme-toggle { flex: 0 0 36px; width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; line-height: 0; color: var(--ink); background: transparent; cursor: pointer; transition: transform .2s ease; }
+    .theme-toggle:hover { transform: translateY(-2px); }
+    .theme-toggle:active { transform: translateY(0) scale(.92); }
+    .theme-toggle svg { display: block; width: 18px; height: 18px; margin: auto; }
+    .theme-toggle .moon-icon { display: none; }
+    :root[data-theme="dark"] .theme-toggle .sun-icon { display: none; }
+    :root[data-theme="dark"] .theme-toggle .moon-icon { display: block; }
+    :root[data-theme="dark"] .theme-toggle { color: #d1c2ff; }
     .login { font-size: 13px; font-weight: 650; }
     .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 13px 18px; min-height: 46px; border-radius: 12px; border: 1px solid transparent; font-size: 13px; font-weight: 700; letter-spacing: -.015em; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease, background .2s ease; }
     .btn:hover { transform: translateY(-2px); }
@@ -196,7 +204,7 @@
     .motion-info h3 { margin: 0 0 8px; font-size: 16px; letter-spacing: -.045em; }
     .motion-info p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
     .motion-bottom { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 14px; }
-    .motion-bottom span { padding: 5px 7px; border-radius: 6px; border: 1px solid #ebe5f6; color: #786b8f; background: #faf8ff; font-size: 8px; }
+    .motion-bottom span { padding: 6px 9px; border-radius: 6px; border: 1px solid #ebe5f6; color: #786b8f; background: #faf8ff; font-size: 9px; }
     .workflow-strip { padding: 24px 0 62px; }
     .strip-inner { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); border: 1px solid var(--line); border-radius: 17px; background: rgba(255,255,255,.66); overflow: hidden; }
     .strip-lead, .strip-item { padding: 20px 22px; display: flex; flex-direction: column; justify-content: center; gap: 7px; min-height: 92px; }
@@ -238,13 +246,13 @@
     .step-tags span { font-size: 9px; color: #6f48bb; background: #f2ebff; padding: 5px 8px; border-radius: 6px; }
 
     .showcase { padding: 84px 0; }
-    .showcase-card { position: relative; overflow: hidden; display: grid; grid-template-columns: .85fr 1.15fr; align-items: center; gap: 40px; padding: 48px; border-radius: 24px; color: white; background: #17131f; }
-    .showcase-card::before { content: ""; position: absolute; width: 460px; height: 460px; left: 55%; top: -235px; border-radius: 50%; background: radial-gradient(circle, rgba(127,53,255,.32), rgba(127,53,255,0) 68%); }
+    .showcase-card { position: relative; overflow: hidden; display: grid; grid-template-columns: .85fr 1.15fr; align-items: center; gap: 40px; padding: 48px; border: 1px solid var(--line); border-radius: 24px; color: var(--ink); background: var(--white); }
+    .showcase-card::before { content: ""; position: absolute; width: 460px; height: 460px; left: 55%; top: -235px; border-radius: 50%; background: radial-gradient(circle, rgba(127,53,255,.12), rgba(127,53,255,0) 68%); pointer-events: none; }
     .showcase-copy { position: relative; z-index: 1; }
-    .showcase-copy .section-kicker { color: #c3a0ff; }
+    .showcase-copy .section-kicker { color: #6a36d5; }
     .showcase-copy h2 { max-width: 480px; font-size: clamp(31px, 3.7vw, 44px); }
-    .showcase-copy p { max-width: 405px; color: #b4adbf; line-height: 1.75; font-size: 13px; margin: 18px 0 24px; }
-    .showcase-points { display: grid; gap: 10px; margin: 22px 0 27px; color: #ddd7e8; font-size: 11px; }
+    .showcase-copy p { max-width: 405px; color: var(--muted); line-height: 1.75; font-size: 13px; margin: 18px 0 24px; }
+    .showcase-points { display: grid; gap: 10px; margin: 22px 0 27px; color: var(--ink); font-size: 11px; }
     .showcase-points div { display: flex; gap: 9px; align-items: center; }
     .showcase-points svg { width: 14px; height: 14px; color: #a980ff; }
     .mini-board { position: relative; z-index: 1; min-height: 292px; border: 1px solid #3c3449; border-radius: 13px; background: #0d0b12; padding: 17px; box-shadow: 0 20px 60px rgba(0,0,0,.22); }
@@ -301,6 +309,7 @@
     :root[data-theme="dark"] .step:hover { border-color: #60428e; background: #252130; }
     :root[data-theme="dark"] .step-num { border-color: #43345a; background: #272131; }
     :root[data-theme="dark"] .step-tags span { color: #d0b5ff; background: #302442; }
+    :root[data-theme="dark"] .showcase-copy .section-kicker { color: #c3a0ff; }
     :root[data-theme="dark"] .cta-inner { border-color: #493563; background: linear-gradient(110deg, #282038, #1a1721 75%); }
     :root[data-theme="dark"] footer { background: #0e0d13; }
     :root[data-theme="dark"] .footer-inner { color: #9994a6; }
@@ -326,7 +335,7 @@
       .shell { width: min(100% - 32px, 1240px); }
       .nav { height: 65px; }
       .nav-links, .login { display: none; }
-      .nav-actions { gap: 0; }
+      .nav-actions { gap: 8px; }
       .nav-actions .btn { padding: 10px 12px; min-height: 39px; font-size: 11px; }
       .brand { font-size: 21px; }
       .hero { padding: 56px 0 35px; }
@@ -412,6 +421,10 @@
         <a href="#workspace">Рабочее пространство</a>
       </div>
       <div class="nav-actions">
+        <button class="theme-toggle" type="button" aria-label="Переключить тему" title="Переключить тему">
+          <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/></svg>
+        </button>
         <a class="login" href="#workspace">Войти</a>
         <a class="btn btn-primary" href="#open-editor">Открыть редактор <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a>
       </div>
@@ -606,6 +619,11 @@
         if (event.data?.type !== 'pixo:theme' || !['light', 'dark'].includes(event.data.theme)) return;
         document.documentElement.dataset.theme = event.data.theme;
         document.querySelector('meta[name="theme-color"]')?.setAttribute('content', event.data.theme === 'dark' ? '#111016' : '#f7f7fb');
+      });
+
+      document.querySelector('.theme-toggle')?.addEventListener('click', () => {
+        const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        window.parent.postMessage({ type: 'pixo:set-theme', theme: nextTheme }, window.location.origin);
       });
 
       const demoWindow = document.getElementById('demoWindow');
