@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f7f7fb" />
+  <meta name="description" content="Pixo — рабочее пространство для извлечения, хранения и сборки SVG-компонентов." />
+  <title>Pixo — SVG в компоненты. Компоненты в идеи.</title>
+  <style>
+    :root {
+      --ink: #18171e;
+      --muted: #777583;
+      --line: #e8e6ef;
+      --paper: #f7f7fb;
+      --white: #fff;
+      --purple: #762cff;
+      --purple-2: #9d59ff;
+      --lavender: #f0e8ff;
+      --dark: #111016;
+      --dark-2: #191720;
+      --green: #86e8b7;
+      --radius: 24px;
+      --shadow: 0 24px 80px rgba(41, 25, 77, .11);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: -.025em;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; }
+    .shell { width: min(1240px, calc(100% - 56px)); margin: 0 auto; }
+    .nav-wrap { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid rgba(232,230,239,.8); background: rgba(247,247,251,.84); backdrop-filter: blur(18px); }
+    .nav { height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; font-size: 23px; letter-spacing: -.07em; }
+    .brand-mark { width: 30px; height: 30px; position: relative; display: inline-block; }
+    .brand-mark i { position: absolute; display: block; background: var(--purple); border-radius: 5px; transform: rotate(-9deg); }
+    .brand-mark i:nth-child(1) { width: 11px; height: 18px; left: 2px; top: 2px; }
+    .brand-mark i:nth-child(2) { width: 11px; height: 11px; left: 16px; top: 1px; }
+    .brand-mark i:nth-child(3) { width: 11px; height: 11px; left: 16px; top: 15px; }
+    .nav-links { display: flex; align-items: center; gap: 32px; color: #666472; font-size: 13px; font-weight: 550; }
+    .nav-links a { transition: color .2s ease; }
+    .nav-links a:hover { color: var(--purple); }
+    .nav-actions { display: flex; align-items: center; gap: 18px; }
+    .login { font-size: 13px; font-weight: 650; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 13px 18px; min-height: 46px; border-radius: 12px; border: 1px solid transparent; font-size: 13px; font-weight: 700; letter-spacing: -.015em; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease, background .2s ease; }
+    .btn:hover { transform: translateY(-2px); }
+    .btn-primary { color: white; background: var(--purple); box-shadow: 0 8px 22px rgba(118,44,255,.2); }
+    .btn-primary:hover { background: #6420ed; box-shadow: 0 12px 28px rgba(118,44,255,.25); }
+    .btn-light { background: white; border-color: #e5e2ec; color: var(--ink); }
+    .btn-light:hover { box-shadow: 0 8px 25px rgba(33,26,51,.08); }
+    .btn-dark { background: var(--dark); color: white; }
+    .btn svg { width: 15px; height: 15px; }
+
+    .hero { position: relative; overflow: hidden; padding: 82px 0 70px; }
+    .hero::before { content: ""; position: absolute; width: 650px; height: 650px; right: -230px; top: -180px; border-radius: 50%; background: radial-gradient(circle, rgba(180,142,255,.20), rgba(180,142,255,0) 69%); pointer-events: none; }
+    .hero-grid { position: relative; display: grid; grid-template-columns: .86fr 1.14fr; gap: 56px; align-items: center; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: #6a36d5; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; line-height: 1; font-weight: 800; }
+    .eyebrow-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); box-shadow: 0 0 0 4px rgba(118,44,255,.1); }
+    h1 { max-width: 570px; margin: 22px 0 22px; font-size: clamp(43px, 5.15vw, 70px); line-height: .99; letter-spacing: -.075em; font-weight: 760; }
+    h1 .accent { color: var(--purple); }
+    .hero-copy { max-width: 475px; color: var(--muted); font-size: 16px; line-height: 1.75; letter-spacing: -.015em; }
+    .hero-actions { display: flex; gap: 12px; margin: 29px 0 23px; flex-wrap: wrap; }
+    .hero-meta { display: flex; align-items: center; gap: 9px; color: #85828f; font-size: 11px; letter-spacing: 0; }
+    .hero-meta svg { width: 14px; height: 14px; color: #48a878; flex: 0 0 auto; }
+    .hero-visual { position: relative; min-width: 0; perspective: 1200px; }
+    .demo-window { position: relative; overflow: hidden; min-height: 492px; border: 1px solid #33303c; border-radius: 17px; color: #e9e6f2; background: #0c0b10; box-shadow: 0 35px 90px rgba(31,20,56,.2), 0 0 0 7px rgba(255,255,255,.55); transform: rotateY(-5deg) rotateX(1deg); transform-origin: center; }
+    .window-top { height: 43px; display: flex; align-items: center; justify-content: space-between; padding: 0 13px; border-bottom: 1px solid #27242f; background: #111016; }
+    .window-brand { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 800; }
+    .mini-logo { position: relative; width: 17px; height: 17px; display: inline-block; }
+    .mini-logo::before, .mini-logo::after { content: ""; position: absolute; background: var(--purple-2); border-radius: 3px; transform: rotate(-10deg); }
+    .mini-logo::before { left: 1px; top: 2px; width: 6px; height: 12px; }
+    .mini-logo::after { left: 9px; top: 2px; width: 6px; height: 6px; box-shadow: 0 7px 0 var(--purple-2); }
+    .window-status { font-size: 9px; color: #a3a0af; display: flex; gap: 7px; align-items: center; }
+    .status-light { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #52d79b; }
+    .app-body { position: relative; height: 447px; display: grid; grid-template-columns: 116px minmax(0,1fr) 122px; }
+    .app-side { border-right: 1px solid #25222d; background: #111016; padding: 13px 9px; }
+    .panel-title { color: #a8a4b6; font-size: 9px; font-weight: 700; margin: 0 0 12px; }
+    .file-row { display: flex; align-items: center; gap: 6px; padding: 8px 6px; margin: 4px 0; color: #a5a1b1; font-size: 8px; border-radius: 6px; white-space: nowrap; }
+    .file-row.active { background: #2a1c43; color: white; }
+    .file-ico { width: 20px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #42394e; border-radius: 4px; color: #b387ff; font-size: 8px; }
+    .tiny-label { color: #6d697b; font-size: 7px; text-transform: uppercase; letter-spacing: .08em; margin: 17px 0 7px 5px; }
+    .component-mini { margin: 7px 0; padding: 9px 6px; border: 1px solid #2a2634; border-radius: 7px; background: #17151d; }
+    .component-mini svg { width: 100%; height: 31px; display: block; }
+    .component-mini p { margin: 5px 0 0; font-size: 7px; color: #bdb8c9; }
+    .design-stage { position: relative; overflow: hidden; background-color: #09090c; background-image: radial-gradient(#24212c .8px, transparent .8px); background-size: 15px 15px; }
+    .stage-toolbar { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border-bottom: 1px solid #211e29; background: rgba(17,16,22,.83); color: #aaa6b6; font-size: 8px; }
+    .tool-chip { padding: 4px 7px; border-radius: 4px; background: #24202d; color: #f7f3ff; }
+    .canvas-area { position: absolute; inset: 34px 0 0; display: grid; place-items: center; }
+    .artboard { position: relative; width: 84%; max-width: 275px; height: 275px; border: 1px solid #292531; background: rgba(16,14,22,.88); border-radius: 3px; display: grid; place-items: center; transition: width .65s ease, height .65s ease, border-color .35s ease; }
+    .artwork { position: relative; width: 88%; height: 88%; overflow: visible; }
+    .art-piece { position: absolute; transition: transform .7s cubic-bezier(.2,.7,.2,1), opacity .4s ease, filter .4s ease; }
+    .art-piece svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .piece-orbit { width: 58%; height: 58%; left: 20%; top: 14%; }
+    .piece-spark { width: 35%; height: 35%; right: 2%; top: 6%; }
+    .piece-core { width: 29%; height: 29%; left: 8%; bottom: 5%; }
+    .piece-leaf { width: 40%; height: 40%; right: 12%; bottom: 4%; }
+    .piece-spark-copy { width: 23%; height: 23%; left: 52%; top: 51%; opacity: 0; z-index: 2; transform: translate(10px,5px) scale(.4); filter: drop-shadow(0 0 0 rgba(159,91,255,0)); }
+    .piece-spark-copy svg { overflow: visible; }
+    .selection-box { position: absolute; left: 18%; top: 12%; width: 62%; height: 61%; border: 1px solid #b78cff; pointer-events: none; opacity: 0; transition: all .45s ease; }
+    .selection-box::before, .selection-box::after { content: ""; position: absolute; width: 5px; height: 5px; background: white; border: 1px solid #a66aff; }
+    .selection-box::before { left: -3px; top: -3px; box-shadow: calc(100% + 0px) 0 0 -1px white; }
+    .selection-box::after { right: -3px; bottom: -3px; }
+    .selection-tag { position: absolute; left: 18%; top: calc(12% - 17px); background: #8c42ff; color: white; border-radius: 3px 3px 0 0; padding: 3px 6px; font-size: 7px; opacity: 0; transition: opacity .3s; }
+    .stage-step-1 .selection-box, .stage-step-1 .selection-tag { opacity: 0; }
+    .stage-step-2 .selection-box, .stage-step-3 .selection-box { opacity: 1; }
+    .stage-step-2 .selection-tag, .stage-step-3 .selection-tag { opacity: 1; }
+    .stage-step-2 .piece-orbit { filter: drop-shadow(0 0 9px rgba(159,91,255,.65)); transform: scale(1.06); }
+    .stage-step-3 .piece-orbit { transform: translate(-8px,-10px) scale(.78); }
+    .stage-step-3 .piece-spark { transform: translate(13px,-4px) scale(.74); }
+    .stage-step-3 .piece-core { transform: translate(-8px,13px) scale(.8); }
+    .stage-step-3 .piece-leaf { transform: translate(14px,12px) scale(.8); }
+    .stage-step-4 .artboard { width: 92%; height: 210px; border-color: #4c356b; }
+    .stage-step-4 .piece-orbit { transform: translate(-38px,-8px) scale(.68); }
+    .stage-step-4 .piece-spark { transform: translate(15px,-25px) scale(.7); }
+    .stage-step-4 .piece-core { transform: translate(-15px,25px) scale(.7); }
+    .stage-step-4 .piece-leaf { transform: translate(42px,24px) scale(.76); }
+    .stage-step-4 .selection-box, .stage-step-4 .selection-tag { opacity: 0; }
+    .stage-step-5 .piece-spark { transform: translate(-11px,-7px) scale(.9); }
+    .stage-step-5 .piece-spark-copy { opacity: 1; transform: translate(24px,2px) scale(1); filter: drop-shadow(0 0 12px rgba(159,91,255,.5)); }
+    .stage-step-5 .selection-box { left: 49%; top: 48%; width: 28%; height: 27%; opacity: 1; }
+    .stage-step-5 .selection-tag { left: 49%; top: calc(48% - 17px); opacity: 1; }
+    .stage-step-6 .artboard { width: 92%; height: 210px; border-color: #68449a; box-shadow: 0 0 30px rgba(128,55,255,.08); }
+    .stage-step-6 .piece-orbit { transform: translate(-38px,-8px) scale(.68); }
+    .stage-step-6 .piece-spark { transform: translate(-19px,-25px) scale(.7); }
+    .stage-step-6 .piece-core { transform: translate(-15px,25px) scale(.7); }
+    .stage-step-6 .piece-leaf { transform: translate(36px,24px) scale(.76); }
+    .stage-step-6 .piece-spark-copy { opacity: 1; transform: translate(28px,18px) scale(.82); }
+    .stage-step-6 .selection-box, .stage-step-6 .selection-tag { opacity: 0; }
+    .demo-cursor { position: absolute; z-index: 12; left: 55%; top: 40%; display: flex; align-items: flex-start; gap: 5px; pointer-events: none; opacity: .96; transition: left .85s cubic-bezier(.2,.8,.2,1), top .85s cubic-bezier(.2,.8,.2,1); filter: drop-shadow(0 3px 6px rgba(0,0,0,.35)); }
+    .demo-cursor svg { width: 19px; height: 24px; flex: 0 0 auto; }
+    .cursor-label { margin: 12px 0 0 -2px; white-space: nowrap; border: 1px solid #5a417a; border-radius: 5px; background: #251b35; color: #f7f2ff; padding: 4px 7px; font-size: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+    /* Cursor moves through the complete interface: library → canvas → properties. */
+    .stage-step-1 .demo-cursor { left: 11%; top: 23%; }
+    .stage-step-2 .demo-cursor { left: 49%; top: 43%; }
+    .stage-step-3 .demo-cursor { left: 11%; top: 63%; }
+    .stage-step-4 .demo-cursor { left: 64%; top: 65%; }
+    .stage-step-5 .demo-cursor { left: 59%; top: 30%; }
+    .stage-step-6 .demo-cursor { left: 88%; top: 53%; }
+    .stage-step-1 .demo-cursor svg, .stage-step-2 .demo-cursor svg, .stage-step-3 .demo-cursor svg,
+    .stage-step-5 .demo-cursor svg, .stage-step-6 .demo-cursor svg { animation: cursorClick .9s ease-in-out 1; }
+    .file-row.demo-focus, .component-mini.demo-focus, .prop-value.demo-focus { outline: 1px solid #a875ff; outline-offset: 1px; background: #2a1c43; animation: focusPulse 1.25s ease-in-out; }
+    .art-piece.demo-focus { animation: pieceFocus 1.25s ease-in-out; }
+    @keyframes focusPulse { 0%,100% { box-shadow: 0 0 0 rgba(145,83,255,0); } 35%,70% { box-shadow: 0 0 20px rgba(145,83,255,.4); } }
+    @keyframes pieceFocus { 0%,100% { filter: drop-shadow(0 0 0 rgba(159,91,255,0)); } 35%,70% { filter: drop-shadow(0 0 15px rgba(159,91,255,.9)); } }
+    @keyframes cursorClick { 0%,100% { transform: scale(1); } 45% { transform: scale(.82); } }
+    .right-props { border-left: 1px solid #25222d; background: #111016; padding: 13px 9px; }
+    .prop-tabs { display: flex; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #292530; font-size: 8px; color: #8d889d; }
+    .prop-tabs span:first-child { color: #f5f0ff; border-bottom: 2px solid #a35cff; padding-bottom: 9px; margin-bottom: -11px; }
+    .prop-label { font-size: 7px; color: #858092; margin: 14px 0 6px; }
+    .prop-value { background: #1b1823; border: 1px solid #312b3b; border-radius: 4px; padding: 7px 6px; color: #d1ccdc; font-size: 8px; }
+    .prop-color { display: flex; align-items: center; gap: 6px; }
+    .color-swatch { width: 12px; height: 12px; border-radius: 3px; background: #a54cff; }
+    .app-bottom { position: absolute; bottom: 10px; left: 10px; display: flex; gap: 10px; align-items: center; color: #9994a8; font-size: 8px; padding: 7px 9px; border: 1px solid #2a2632; border-radius: 5px; background: rgba(17,16,22,.9); }
+    .app-bottom .ok { width: 5px; height: 5px; border-radius: 50%; background: #51d7a0; }
+    .demo-caption { position: absolute; bottom: -17px; right: 13px; display: flex; gap: 7px; align-items: center; color: #8b8796; font-size: 10px; }
+    .float-note { position: absolute; z-index: 15; display: flex; align-items: center; gap: 10px; min-width: 190px; padding: 12px 14px; border: 1px solid rgba(232,226,244,.9); border-radius: 13px; color: #24202c; background: rgba(255,255,255,.94); backdrop-filter: blur(12px); box-shadow: 0 18px 45px rgba(38,21,65,.14); animation: noteFloat 4.8s ease-in-out infinite; }
+    .float-note-top { top: -22px; right: -15px; min-width: 220px; transition: transform .35s ease, opacity .35s ease; }
+    .note-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 9px; color: white; background: linear-gradient(135deg,#8f42ff,#6f25ed); font-size: 15px; font-weight: 800; box-shadow: 0 6px 14px rgba(118,44,255,.24); }
+    .float-note strong { display: block; font-size: 10px; letter-spacing: -.03em; }
+    .float-note small { display: block; color: #817b8d; font-size: 8px; margin-top: 4px; letter-spacing: 0; }
+    @keyframes noteFloat { 0%,100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-7px) rotate(-.4deg); } }
+    .caption-play { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: white; box-shadow: 0 4px 12px #d9d4e6; color: var(--purple); }
+    .caption-play svg { width: 10px; height: 10px; }
+    .demo-progress { display: inline-flex; gap: 4px; align-items: center; margin-left: 3px; }
+    .demo-progress span { display: block; width: 5px; height: 5px; border-radius: 99px; background: #cbc4d8; transition: width .3s ease, background .3s ease; }
+    .demo-progress span.active { width: 16px; background: var(--purple); }
+
+    .motion-section { position: relative; overflow: hidden; background: linear-gradient(180deg,#f7f7fb 0%,#f0edf7 48%,#f7f7fb 100%); }
+    .motion-section::before { content: ""; position: absolute; left: -180px; top: 90px; width: 430px; height: 430px; border-radius: 50%; background: radial-gradient(circle,rgba(149,93,255,.13),rgba(149,93,255,0) 70%); pointer-events: none; }
+    .motion-section .shell { position: relative; }
+    .motion-kicker { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #e4d8ff; border-radius: 99px; background: rgba(255,255,255,.8); padding: 7px 10px; color: #7640d8; font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 17px; }
+    .motion-kicker .pulse { width: 6px; height: 6px; border-radius: 50%; background: #8d41ff; box-shadow: 0 0 0 4px rgba(141,65,255,.12); }
+    .motion-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+    .motion-card { overflow: hidden; border: 1px solid #e4e0ec; border-radius: 19px; background: rgba(255,255,255,.88); box-shadow: 0 12px 36px rgba(42,29,66,.045); transition: transform .28s ease,border-color .28s ease,box-shadow .28s ease; }
+    .motion-card:hover { transform: translateY(-6px); border-color: #cbb4ff; box-shadow: 0 22px 48px rgba(54,28,93,.12); }
+    .motion-preview { position: relative; overflow: hidden; padding: 9px; background: #0b0a10; border-bottom: 1px solid #2a2435; }
+    .motion-preview::after { content: "LOOPING DEMO"; position: absolute; top: 17px; right: 17px; padding: 5px 7px; border: 1px solid rgba(186,151,255,.3); border-radius: 5px; color: #d5c5fa; background: rgba(25,19,35,.85); font-size: 7px; font-weight: 750; letter-spacing: .1em; }
+    .motion-preview img { display: block; width: 100%; height: auto; aspect-ratio: 1.8 / 1; object-fit: cover; border: 1px solid #25202f; border-radius: 7px; }
+    .motion-info { padding: 20px 21px 22px; }
+    .motion-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; color: #8e879c; font-size: 9px; }
+    .motion-meta span:first-child { display: inline-flex; gap: 6px; align-items: center; color: #7134d4; font-weight: 800; }
+    .motion-meta i { width: 5px; height: 5px; background: #8d41ff; border-radius: 50%; display: inline-block; }
+    .motion-info h3 { margin: 0 0 8px; font-size: 16px; letter-spacing: -.045em; }
+    .motion-info p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
+    .motion-bottom { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 14px; }
+    .motion-bottom span { padding: 5px 7px; border-radius: 6px; border: 1px solid #ebe5f6; color: #786b8f; background: #faf8ff; font-size: 8px; }
+    .workflow-strip { padding: 24px 0 62px; }
+    .strip-inner { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); border: 1px solid var(--line); border-radius: 17px; background: rgba(255,255,255,.66); overflow: hidden; }
+    .strip-lead, .strip-item { padding: 20px 22px; display: flex; flex-direction: column; justify-content: center; gap: 7px; min-height: 92px; }
+    .strip-lead { color: #777482; font-size: 12px; line-height: 1.5; }
+    .strip-lead strong { color: var(--ink); font-size: 13px; }
+    .strip-item { border-left: 1px solid var(--line); }
+    .strip-item strong { font-size: 13px; letter-spacing: -.04em; }
+    .strip-item span { color: var(--muted); font-size: 11px; }
+    .strip-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--lavender); color: var(--purple); margin-bottom: 4px; }
+    .strip-icon svg { width: 15px; height: 15px; }
+
+    section.section { padding: 86px 0; }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 36px; }
+    .section-kicker { color: var(--purple); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 14px; }
+    h2 { margin: 0; font-size: clamp(32px, 4vw, 49px); line-height: 1.04; letter-spacing: -.07em; max-width: 690px; }
+    .section-desc { max-width: 335px; margin: 0 0 4px; color: var(--muted); font-size: 13px; line-height: 1.7; letter-spacing: -.01em; }
+    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .feature-card { position: relative; min-height: 232px; padding: 23px; border: 1px solid var(--line); border-radius: 19px; background: white; overflow: hidden; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+    .feature-card:hover { transform: translateY(-4px); border-color: #d8c6ff; box-shadow: 0 18px 40px rgba(58,33,94,.07); }
+    .feature-icon { width: 42px; height: 42px; display: grid; place-items: center; margin-bottom: 31px; border-radius: 13px; background: #f1eaff; color: var(--purple); }
+    .feature-icon svg { width: 20px; height: 20px; }
+    .feature-card h3 { margin: 0 0 9px; font-size: 17px; letter-spacing: -.05em; }
+    .feature-card p { max-width: 290px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; letter-spacing: -.005em; }
+    .feature-number { position: absolute; right: 22px; top: 24px; color: #eeebf4; font-size: 12px; font-weight: 800; }
+
+    .how-section { background: #eeedf4; }
+    .how-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 76px; align-items: start; }
+    .how-intro { position: sticky; top: 115px; }
+    .how-intro p { max-width: 350px; margin: 19px 0 25px; color: var(--muted); font-size: 14px; line-height: 1.75; }
+    .steps { display: grid; gap: 12px; }
+    .step { display: grid; grid-template-columns: 52px 1fr; gap: 19px; padding: 22px; border: 1px solid #dedbe8; border-radius: 16px; background: rgba(255,255,255,.7); transition: background .2s ease, border-color .2s ease; }
+    .step:hover { background: white; border-color: #cbb4ff; }
+    .step-num { width: 43px; height: 43px; display: grid; place-items: center; color: var(--purple); background: white; border: 1px solid #e4d8ff; border-radius: 12px; font-size: 12px; font-weight: 800; }
+    .step h3 { margin: 2px 0 7px; font-size: 15px; letter-spacing: -.035em; }
+    .step p { margin: 0; max-width: 470px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .step-tags { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+    .step-tags span { font-size: 9px; color: #6f48bb; background: #f2ebff; padding: 5px 8px; border-radius: 6px; }
+
+    .showcase { padding: 84px 0; }
+    .showcase-card { position: relative; overflow: hidden; display: grid; grid-template-columns: .85fr 1.15fr; align-items: center; gap: 40px; padding: 48px; border-radius: 24px; color: white; background: #17131f; }
+    .showcase-card::before { content: ""; position: absolute; width: 460px; height: 460px; left: 55%; top: -235px; border-radius: 50%; background: radial-gradient(circle, rgba(127,53,255,.32), rgba(127,53,255,0) 68%); }
+    .showcase-copy { position: relative; z-index: 1; }
+    .showcase-copy .section-kicker { color: #c3a0ff; }
+    .showcase-copy h2 { max-width: 480px; font-size: clamp(31px, 3.7vw, 44px); }
+    .showcase-copy p { max-width: 405px; color: #b4adbf; line-height: 1.75; font-size: 13px; margin: 18px 0 24px; }
+    .showcase-points { display: grid; gap: 10px; margin: 22px 0 27px; color: #ddd7e8; font-size: 11px; }
+    .showcase-points div { display: flex; gap: 9px; align-items: center; }
+    .showcase-points svg { width: 14px; height: 14px; color: #a980ff; }
+    .mini-board { position: relative; z-index: 1; min-height: 292px; border: 1px solid #3c3449; border-radius: 13px; background: #0d0b12; padding: 17px; box-shadow: 0 20px 60px rgba(0,0,0,.22); }
+    .mini-board-top { display: flex; justify-content: space-between; align-items: center; color: #aaa3b8; font-size: 9px; border-bottom: 1px solid #2b2534; padding-bottom: 13px; }
+    .mini-board-top b { color: white; font-size: 10px; }
+    .mini-board-content { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; padding: 21px 0 2px; }
+    .mini-component { min-width: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; min-height: 145px; background: #17131e; border: 1px solid #332a40; border-radius: 9px; animation: floatCard 5s ease-in-out infinite; }
+    .mini-component:nth-child(2) { animation-delay: -.9s; transform: translateY(-5px); }
+    .mini-component:nth-child(3) { animation-delay: -1.8s; }
+    .mini-component svg { width: 62px; height: 62px; }
+    .mini-component span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aaa3b9; font-size: 8px; }
+    @keyframes floatCard { 0%,100% { translate: 0 0; } 50% { translate: 0 -6px; } }
+
+    .final-cta { padding: 0 0 80px; }
+    .cta-inner { display: flex; align-items: center; justify-content: space-between; gap: 25px; padding: 35px 40px; border: 1px solid #e5d9ff; background: linear-gradient(110deg, #f0e8ff, #fff 75%); border-radius: 20px; }
+    .cta-inner h2 { font-size: clamp(27px, 3vw, 36px); max-width: 630px; }
+    .cta-inner p { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+    .cta-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    footer { border-top: 1px solid var(--line); background: #f5f4f9; }
+    .footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 88px; color: #898694; font-size: 10px; }
+    .footer-brand { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 800; font-size: 15px; letter-spacing: -.06em; }
+    .footer-links { display: flex; gap: 20px; }
+    .footer-links a:hover { color: var(--purple); }
+    .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+    .mobile-menu { display: none; }
+
+    @media (max-width: 1000px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 45px; }
+      .hero-copy { max-width: 600px; }
+      .hero-visual { width: min(780px, 100%); margin: 0 auto; }
+      .float-note-top { right: 8px; top: -18px; }
+      .float-note-bottom { left: 8px; bottom: 34px; }
+      .demo-window { transform: none; }
+      .strip-inner { grid-template-columns: repeat(2,1fr); }
+      .strip-lead { border-bottom: 1px solid var(--line); }
+      .strip-item:nth-child(2) { border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+      .strip-item:nth-child(3) { border-left: 0; }
+      .feature-grid { grid-template-columns: repeat(2,1fr); }
+      .how-grid { grid-template-columns: 1fr; gap: 30px; }
+      .how-intro { position: static; }
+      .showcase-card { grid-template-columns: 1fr; }
+      .mini-board { width: min(650px, 100%); margin: 0 auto; }
+    }
+    @media (max-width: 650px) {
+      .shell { width: min(100% - 32px, 1240px); }
+      .nav { height: 65px; }
+      .nav-links, .login { display: none; }
+      .nav-actions { gap: 0; }
+      .nav-actions .btn { padding: 10px 12px; min-height: 39px; font-size: 11px; }
+      .brand { font-size: 21px; }
+      .hero { padding: 56px 0 35px; }
+      .float-note { display: none; }
+      .motion-grid { grid-template-columns: 1fr; }
+      .motion-preview img { aspect-ratio: 1.8 / 1; }
+      .motion-info { padding: 17px; }
+      h1 { font-size: clamp(41px, 12vw, 57px); }
+      .hero-copy { font-size: 14px; }
+      .hero-actions { display: grid; grid-template-columns: 1fr; }
+      .hero-actions .btn { width: 100%; }
+      .demo-window { min-height: 375px; border-radius: 12px; }
+      .app-body { height: 332px; grid-template-columns: 82px minmax(0,1fr) 84px; }
+      .app-side, .right-props { padding: 9px 5px; }
+      .file-row { gap: 4px; padding: 6px 3px; font-size: 7px; }
+      .file-ico { width: 16px; height: 18px; }
+      .component-mini { padding: 6px 4px; }
+      .component-mini svg { height: 22px; }
+      .component-mini p { font-size: 6px; }
+      .stage-toolbar { padding: 0 6px; gap: 4px; font-size: 7px; }
+      .tool-chip { padding: 4px 5px; }
+      .artboard { width: 90%; height: 205px; }
+      .stage-step-4 .artboard { height: 175px; }
+      .panel-title { font-size: 8px; }
+      .prop-tabs { gap: 5px; font-size: 7px; }
+      .prop-value { font-size: 7px; padding: 6px 3px; }
+      .app-bottom { bottom: 6px; left: 6px; gap: 6px; font-size: 7px; padding: 5px 6px; }
+      .demo-caption { bottom: -27px; right: 3px; font-size: 9px; gap: 5px; }
+      .demo-progress { gap: 3px; }
+      .demo-progress span { width: 4px; height: 4px; }
+      .demo-progress span.active { width: 10px; }
+      .float-note-top { right: -4px; top: -18px; min-width: 190px; padding: 9px 11px; }
+      .workflow-strip { padding: 40px 0 26px; }
+      .strip-inner { grid-template-columns: 1fr 1fr; }
+      .strip-lead, .strip-item { padding: 15px; min-height: 100px; }
+      .strip-item strong { font-size: 11px; }
+      .strip-item span { font-size: 10px; }
+      section.section { padding: 58px 0; }
+      .section-head { display: block; margin-bottom: 25px; }
+      .section-desc { margin-top: 16px; }
+      h2 { font-size: 35px; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .feature-card { min-height: auto; padding: 20px; }
+      .feature-icon { margin-bottom: 24px; }
+      .how-section { padding: 2px 0; }
+      .step { padding: 17px; grid-template-columns: 42px 1fr; gap: 13px; }
+      .step-num { width: 38px; height: 38px; }
+      .showcase { padding: 55px 0; }
+      .showcase-card { padding: 26px 19px; gap: 28px; }
+      .showcase-copy h2 { font-size: 34px; }
+      .mini-board { padding: 10px; min-height: 245px; }
+      .mini-board-content { gap: 6px; padding-top: 14px; }
+      .mini-component { min-height: 133px; }
+      .mini-component svg { width: 48px; height: 48px; }
+      .cta-inner { display: block; padding: 26px 21px; }
+      .cta-inner h2 { font-size: 30px; }
+      .cta-actions { margin-top: 22px; }
+      .cta-actions .btn { flex: 1; }
+      .final-cta { padding-bottom: 55px; }
+      .footer-inner { padding: 22px 0; flex-wrap: wrap; }
+      .footer-links { width: 100%; gap: 15px; flex-wrap: wrap; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="nav-wrap">
+    <nav class="nav shell" aria-label="Главная навигация">
+      <a href="#top" class="brand" aria-label="Pixo — на главную"><span class="brand-mark"><i></i><i></i><i></i></span>Pixo</a>
+      <div class="nav-links">
+        <a href="#features">Возможности</a>
+        <a href="#workflow">Как работает</a>
+        <a href="#motion">Анимации</a>
+        <a href="#workspace">Рабочее пространство</a>
+      </div>
+      <div class="nav-actions">
+        <a class="login" href="#workspace">Войти</a>
+        <a class="btn btn-primary" href="#demo">Открыть редактор <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a>
+      </div>
+    </nav>
+  </div>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-grid shell">
+        <div class="hero-content">
+          <div class="eyebrow"><span class="eyebrow-dot"></span> SVG WORKSPACE · BUILT FOR CREATORS</div>
+          <h1>От готовой иллюстрации — к <span class="accent">своей системе</span> компонентов.</h1>
+          <p class="hero-copy">Загружай SVG, извлекай нужные объекты и собирай из них новые композиции. Всё в одном аккуратном рабочем пространстве — без рутины и бесконечных файлов.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#demo">Попробовать Pixo <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a>
+            <a class="btn btn-light" href="#workflow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 6 9 6-9 6z"/></svg> Посмотреть процесс</a>
+          </div>
+          <div class="hero-meta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>Работает в браузере <span>·</span> Собственные SVG <span>·</span> Контроль над каждым объектом</div>
+        </div>
+
+        <div class="hero-visual" id="demo" aria-label="Анимированная демонстрация интерфейса Pixo">
+          <div class="demo-window stage-step-1" id="demoWindow">
+            <div class="window-top">
+              <div class="window-brand"><span class="mini-logo"></span>Pixo <span style="color:#777183;font-weight:500">/</span> Untitled project</div>
+              <div class="window-status"><span class="status-light"></span><span id="demoStatus">Импорт SVG</span></div>
+            </div>
+            <div class="app-body">
+              <aside class="app-side">
+                <p class="panel-title">Библиотека</p>
+                <div class="file-row active"><span class="file-ico">SVG</span><span>orbit-art.svg</span></div>
+                <div class="file-row"><span class="file-ico">SVG</span><span>shapes.svg</span></div>
+                <div class="file-row" id="importTarget"><span class="file-ico">＋</span><span>Импортировать</span></div>
+                <div class="tiny-label">Мои компоненты</div>
+                <div class="component-mini" id="orbitComponent">
+                  <svg viewBox="0 0 80 44" fill="none"><path d="M40 4 48 22 40 40 32 22Z stroke="#ae72ff" stroke-width="3"/><circle cx="40" cy="22" r="7" fill="#a44cff"/><path d="M40 4C9 6 9 38 40 40M40 4C71 6 71 38 40 40" stroke="#52d5ef" stroke-width="2"/></svg>
+                  <p>Orbit mark</p>
+                </div>
+                <div class="component-mini">
+                  <svg viewBox="0 0 80 44" fill="none"><path d="m40 5 6 12 13 2-9 9 2 12-12-6-12 6 2-12-9-9 13-2z" fill="#8b42ff"/></svg>
+                  <p>Star shape</p>
+                </div>
+              </aside>
+              <div class="design-stage stage-step-1" id="designStage">
+                <div class="stage-toolbar"><span class="tool-chip" id="toolLabel">Select</span><span>Move</span><span>Pen</span><span style="margin-left:auto">100%</span></div>
+                <div class="canvas-area">
+                  <div class="artboard" id="artboard">
+                    <div class="artwork">
+                      <div class="art-piece piece-orbit" data-piece="orbit">
+                        <svg viewBox="0 0 140 140" fill="none"><ellipse cx="70" cy="70" rx="27" ry="62" transform="rotate(45 70 70)" stroke="#4ed6f4" stroke-width="7"/><ellipse cx="70" cy="70" rx="27" ry="62" transform="rotate(-45 70 70)" stroke="#4ed6f4" stroke-width="7"/><ellipse cx="70" cy="70" rx="27" ry="62" stroke="#9b52ff" stroke-width="7" transform="rotate(90 70 70)" opacity=".65"/></svg>
+                      </div>
+                      <div class="art-piece piece-spark" data-piece="spark">
+                        <svg viewBox="0 0 100 100"><path d="M50 3 61 35 95 37 69 58 78 92 50 72 22 92 31 58 5 37 39 35Z" fill="#a04bff"/><circle cx="50" cy="50" r="10" fill="#d2b0ff"/></svg>
+                      </div>
+                      <div class="art-piece piece-core" data-piece="core">
+                        <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="39" fill="#8b3dff"/><circle cx="50" cy="50" r="22" fill="#181221"/><circle cx="50" cy="50" r="8" fill="#c4a1ff"/></svg>
+                      </div>
+                      <div class="art-piece piece-leaf" data-piece="leaf">
+                        <svg viewBox="0 0 100 100" fill="none"><path d="M14 78C12 27 48 6 88 13 91 52 67 88 14 78Z" fill="#7f38ee"/><path d="M17 78 74 26" stroke="#d5baff" stroke-width="4" stroke-linecap="round"/></svg>
+                      </div>
+                      <div class="art-piece piece-spark-copy" data-piece="spark-copy" aria-label="Дубликат объекта">
+                        <svg viewBox="0 0 100 100"><path d="M50 3 61 35 95 37 69 58 78 92 50 72 22 92 31 58 5 37 39 35Z" fill="#c18aff"/><circle cx="50" cy="50" r="10" fill="#ead9ff"/></svg>
+                      </div>
+                      <div class="selection-box" id="selectionBox"></div><div class="selection-tag" id="selectionTag">orbit / group</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="app-bottom"><span class="ok"></span><span id="stageHint">Готово к импорту</span><span>·</span><span id="objectCount">1 SVG</span></div>
+              </div>
+              <aside class="right-props">
+                <div class="prop-tabs"><span>Свойства</span><span>Слои</span></div>
+                <p class="prop-label">Выбранный объект</p><div class="prop-value" id="propName">orbit-art.svg</div>
+                <p class="prop-label">Размер</p><div class="prop-value" id="propSize">512 × 512</div>
+                <p class="prop-label">Заливка</p><div class="prop-value prop-color"><span class="color-swatch" id="colorSwatch"></span><span id="propColor">#A04BFF</span></div>
+                <p class="prop-label">Действие</p><div class="prop-value" id="propAction">Открыть файл</div>
+              </aside>
+              <div class="demo-cursor" id="demoCursor" aria-hidden="true"><svg viewBox="0 0 24 30" fill="none"><path d="M3 2.5 3.2 24 8.8 18.8 13.6 28 17.1 26.2 12.3 17.2 20.5 16.5Z" fill="#fff" stroke="#19131f" stroke-width="1.6" stroke-linejoin="round"/></svg><span class="cursor-label" id="cursorLabel">Import</span></div>
+            </div>
+          </div>
+          <div class="demo-caption"><span class="caption-play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><span id="demoCaption">1. Импортируй исходный SVG</span><span class="demo-progress" id="demoProgress" aria-hidden="true"><span class="active"></span><span></span><span></span><span></span><span></span><span></span></span></div>
+          <div class="float-note float-note-top"><span class="note-mark" id="actionNoteMark">↗</span><div><strong id="actionNoteTitle">SVG импортирован</strong><small id="actionNoteText">orbit-art.svg · 512 × 512</small></div></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="workflow-strip shell reveal">
+      <div class="strip-inner">
+        <div class="strip-lead"><strong>Не ещё один каталог иконок.</strong><span>Pixo помогает превращать исходники в собственную рабочую библиотеку.</span></div>
+        <div class="strip-item"><span class="strip-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m-5-5 5 5 5-5"/><path d="M5 17v3h14v-3"/></svg></span><strong>Твои SVG</strong><span>Импортируй свои файлы</span></div>
+        <div class="strip-item"><span class="strip-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v8H8z"/></svg></span><strong>Точные элементы</strong><span>Выделяй объект или группу</span></div>
+        <div class="strip-item"><span class="strip-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h7v7H4zM14 4h6v6h-6zM14 14h6v6h-6z"/><path d="M11 10h3M10 14v2"/></svg></span><strong>Новые композиции</strong><span>Собирай на одном холсте</span></div>
+      </div>
+    </div>
+
+    <section class="section shell" id="features">
+      <div class="section-head reveal">
+        <div><div class="section-kicker">Возможности Pixo</div><h2>Всё нужное для работы с SVG. Ничего лишнего.</h2></div>
+        <p class="section-desc">Продуманный процесс: от исходной иллюстрации до повторно используемого компонента и новой композиции.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card reveal"><span class="feature-number">01</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m-5 5 5-5 5 5"/><path d="M5 14v5h14v-5"/></svg></div><h3>Импортируй свои SVG</h3><p>Открывай собственные иллюстрации и исходники. Все файлы проекта собраны в одном понятном месте.</p></article>
+        <article class="feature-card reveal"><span class="feature-number">02</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h7v7H4zM13 13h7v7h-7z"/><path d="m13 4 7 7M4 20l7-7" stroke-linecap="round"/></svg></div><h3>Выделяй отдельные объекты</h3><p>Выбирай нужную фигуру или группу внутри исходной иллюстрации, а не сохраняй каждый файл целиком.</p></article>
+        <article class="feature-card reveal"><span class="feature-number">03</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 8h8v8H8z"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4"/></svg></div><h3>Сохраняй как компонент</h3><p>Давай элементам имена, храни их отдельно от исходников и быстро находи в собственной библиотеке.</p></article>
+        <article class="feature-card reveal"><span class="feature-number">04</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 19 5-5M14 5l5 5M4 4l6 6M14 14l6 6"/><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div><h3>Собирай композиции</h3><p>Перетаскивай сохранённые элементы на холст, располагай их и создавай новые комбинации из готовых деталей.</p></article>
+        <article class="feature-card reveal"><span class="feature-number">05</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/><path d="m8 8 8 8m0-8-8 8"/></svg></div><h3>Контролируй каждый слой</h3><p>Работай с объектами и группами, проверяй структуру и меняй свойства через отдельную панель.</p></article>
+        <article class="feature-card reveal"><span class="feature-number">06</span><div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3h7v7M21 3 12 12"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></div><h3>Экспортируй SVG</h3><p>Забирай готовую композицию в формате SVG и продолжай работу в привычных инструментах.</p></article>
+      </div>
+    </section>
+
+    <section class="section motion-section" id="motion">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><div class="motion-kicker"><span class="pulse"></span> Живой интерфейс · GIF demos</div><h2>Не просто смотри. Почувствуй, как работает Pixo.</h2></div>
+          <p class="section-desc">Микроанимации показывают реальные сценарии редактора: двигаешь, дублируешь, собираешь — и сразу видишь результат.</p>
+        </div>
+        <div class="motion-grid">
+          <article class="motion-card reveal">
+            <div class="motion-preview"><img src="assets/pixo-move-object.gif" alt="Анимация: выделение и перемещение SVG-объекта на холсте" loading="lazy"></div>
+            <div class="motion-info"><div class="motion-meta"><span><i></i> 01 / MOVE</span><span>Перетаскивание</span></div><h3>Перемещай с точностью</h3><p>Выдели нужную форму и перетащи её на новое место. Рамка выделения и курсор показывают каждое действие.</p><div class="motion-bottom"><span>Drag & drop</span><span>Позиционирование</span></div></div>
+          </article>
+          <article class="motion-card reveal">
+            <div class="motion-preview"><img src="assets/pixo-duplicate-object.gif" alt="Анимация: дублирование SVG-объекта на холсте" loading="lazy"></div>
+            <div class="motion-info"><div class="motion-meta"><span><i></i> 02 / DUPLICATE</span><span>Копия создана</span></div><h3>Дублируй в один шаг</h3><p>Создавай копию объекта и размещай её отдельно. Оригинал остаётся на месте — можно экспериментировать без риска.</p><div class="motion-bottom"><span>Быстрые действия</span><span>Неразрушающий подход</span></div></div>
+          </article>
+          <article class="motion-card reveal">
+            <div class="motion-preview"><img src="assets/pixo-build-composition.gif" alt="Анимация: перетаскивание компонентов из библиотеки на холст для сборки композиции" loading="lazy"></div>
+            <div class="motion-info"><div class="motion-meta"><span><i></i> 03 / COMPOSE</span><span>Библиотека → холст</span></div><h3>Собирай новое из готового</h3><p>Перетаскивай сохранённые компоненты из библиотеки на рабочий холст и объединяй их в собственную композицию.</p><div class="motion-bottom"><span>Повторное использование</span><span>SVG workflow</span></div></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section how-section" id="workflow">
+      <div class="how-grid shell">
+        <div class="how-intro reveal">
+          <div class="section-kicker">Простой сценарий</div>
+          <h2>Четыре шага. И ты уже собираешь своё.</h2>
+          <p>Вместо разрозненных файлов — понятный рабочий процесс, где каждый элемент можно использовать повторно.</p>
+          <a class="btn btn-primary" href="#demo">Посмотреть анимацию <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a>
+        </div>
+        <div class="steps">
+          <article class="step reveal"><div class="step-num">01</div><div><h3>Открой исходную иллюстрацию</h3><p>Импортируй SVG, чтобы увидеть его на холсте и в структуре слоёв.</p><div class="step-tags"><span>Импорт</span><span>Исходные файлы</span></div></div></article>
+          <article class="step reveal"><div class="step-num">02</div><div><h3>Выбери объект или группу</h3><p>Кликни по нужной части изображения и проверь, что именно выделено.</p><div class="step-tags"><span>Выделение</span><span>Слои и группы</span></div></div></article>
+          <article class="step reveal"><div class="step-num">03</div><div><h3>Сохрани его в библиотеку</h3><p>Назови компонент, сохрани связь с исходным файлом и используй его отдельно.</p><div class="step-tags"><span>Компоненты</span><span>Повторное использование</span></div></div></article>
+          <article class="step reveal"><div class="step-num">04</div><div><h3>Создай новую композицию</h3><p>Добавляй компоненты на холст, комбинируй элементы и экспортируй результат.</p><div class="step-tags"><span>Холст</span><span>Экспорт SVG</span></div></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="showcase shell" id="workspace">
+      <div class="showcase-card reveal">
+        <div class="showcase-copy">
+          <div class="section-kicker">Твоя библиотека. Твои правила.</div>
+          <h2>Не ищи исходник заново. Просто возьми компонент.</h2>
+          <p>Храни выделенные объекты отдельно, давай им понятные названия и возвращайся к ним в любом проекте. Библиотека растёт вместе с твоей работой.</p>
+          <div class="showcase-points">
+            <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>Исходники и компоненты не смешиваются</div>
+            <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>Названия помогают быстро находить элементы</div>
+            <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>Готовые композиции можно экспортировать</div>
+          </div>
+          <a class="btn btn-primary" href="#demo">Начать работу <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a>
+        </div>
+        <div class="mini-board" aria-label="Пример библиотеки компонентов">
+          <div class="mini-board-top"><b>My components</b><span>12 компонентов&nbsp; · &nbsp;orbit-kit</span></div>
+          <div class="mini-board-content">
+            <div class="mini-component"><svg viewBox="0 0 100 100" fill="none"><ellipse cx="50" cy="50" rx="19" ry="43" stroke="#59d5f4" stroke-width="7" transform="rotate(45 50 50)"/><ellipse cx="50" cy="50" rx="19" ry="43" stroke="#59d5f4" stroke-width="7" transform="rotate(-45 50 50)"/><circle cx="50" cy="50" r="7" fill="#a65aff"/></svg><span>orbit-mark.svg</span></div>
+            <div class="mini-component"><svg viewBox="0 0 100 100"><path d="M50 3 61 35 95 37 69 58 78 92 50 72 22 92 31 58 5 37 39 35Z" fill="#8e42ff"/><circle cx="50" cy="50" r="9" fill="#d8bdff"/></svg><span>spark.svg</span></div>
+            <div class="mini-component"><svg viewBox="0 0 100 100" fill="none"><path d="M12 77C11 29 46 7 88 13 91 53 64 87 12 77Z" fill="#9c4dff"/><path d="M15 78 75 25" stroke="#d7baff" stroke-width="5" stroke-linecap="round"/></svg><span>leaf-shape.svg</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta shell">
+      <div class="cta-inner reveal">
+        <div><h2>Собери свою первую композицию в Pixo.</h2><p>Начни с собственного SVG — закончи новой идеей.</p></div>
+        <div class="cta-actions"><a class="btn btn-primary" href="#demo">Открыть Pixo <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></a><a class="btn btn-light" href="#features">Все возможности</a></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner shell">
+      <a href="#top" class="footer-brand"><span class="brand-mark"><i></i><i></i><i></i></span>Pixo</a>
+      <span>SVG workspace for building with components.</span>
+      <div class="footer-links"><a href="#features">Возможности</a><a href="#workflow">Как работает</a><a href="#top">Наверх ↑</a></div>
+      <span>© 2026 Pixo</span>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const demoWindow = document.getElementById('demoWindow');
+      const designStage = document.getElementById('designStage');
+      const demoStatus = document.getElementById('demoStatus');
+      const demoCaption = document.getElementById('demoCaption');
+      const stageHint = document.getElementById('stageHint');
+      const objectCount = document.getElementById('objectCount');
+      const toolLabel = document.getElementById('toolLabel');
+      const selectionTag = document.getElementById('selectionTag');
+      const propName = document.getElementById('propName');
+      const propSize = document.getElementById('propSize');
+      const propColor = document.getElementById('propColor');
+      const propAction = document.getElementById('propAction');
+      const colorSwatch = document.getElementById('colorSwatch');
+      const cursorLabel = document.getElementById('cursorLabel');
+      const actionNoteMark = document.getElementById('actionNoteMark');
+      const actionNoteTitle = document.getElementById('actionNoteTitle');
+      const actionNoteText = document.getElementById('actionNoteText');
+      const demoProgress = Array.from(document.querySelectorAll('#demoProgress span'));
+      const focusTargets = ['#importTarget', '.piece-orbit', '#orbitComponent', '.piece-leaf', '.piece-spark', '#propAction'];
+      const noteMarks = ['↗', '⌖', '✓', '↔', '＋', '↗'];
+      const captions = [
+        {status:'Импорт SVG', caption:'1. Импорт исходного SVG', hint:'SVG открыт на холсте', count:'1 SVG', tool:'Import', tag:'orbit / group', name:'orbit-art.svg', size:'512 × 512', color:'#A04BFF', action:'Открыть файл', swatch:'#a54cff', cursor:'Import', note:'SVG импортирован', noteText:'orbit-art.svg · 512 × 512'},
+        {status:'Выделение объекта', caption:'2. Выбери нужный объект', hint:'Объект выделен · 4 точки контроля', count:'4 объекта', tool:'Select', tag:'orbit / group', name:'orbit / group', size:'268 × 268', color:'#4ED6F4', action:'Выделен объект', swatch:'#4ed6f4', cursor:'Select', note:'Объект выделен', noteText:'orbit / group · 4 точки'},
+        {status:'Сохранение компонента', caption:'3. Сохрани его как компонент', hint:'Компонент добавлен в библиотеку', count:'1 компонент', tool:'Component', tag:'orbit / group', name:'orbit-mark.svg', size:'268 × 268', color:'#4ED6F4', action:'Сохранить компонент', swatch:'#4ed6f4', cursor:'Save', note:'Компонент сохранён', noteText:'orbit-mark.svg · 268 × 268'},
+        {status:'Перемещение объекта', caption:'4. Перемести объект на холсте', hint:'Объект перемещён · X 420 / Y 216', count:'4 объекта', tool:'Move', tag:'leaf / vector', name:'leaf / vector', size:'96 × 96', color:'#8E3DFF', action:'Перемещение', swatch:'#8e3dff', cursor:'Drag', note:'Позиция обновлена', noteText:'leaf / vector · X 420 / Y 216'},
+        {status:'Дублирование объекта', caption:'5. Создай копию объекта', hint:'Создана копия star-copy.svg', count:'5 объектов', tool:'Duplicate', tag:'star / copy', name:'star-copy.svg', size:'72 × 72', color:'#A04BFF', action:'Создать копию', swatch:'#a54cff', cursor:'Duplicate', note:'Копия создана', noteText:'star-copy.svg · готов к работе'},
+        {status:'Экспорт композиции', caption:'6. Экспортируй готовую композицию', hint:'Композиция готова к экспорту', count:'5 компонентов', tool:'Export', tag:'composition / final', name:'Pixo-composition.svg', size:'840 × 620', color:'#A04BFF', action:'Экспорт SVG', swatch:'#a54cff', cursor:'Export', note:'SVG экспортирован', noteText:'Pixo-composition.svg · готово'}
+      ];
+      let stage = 0;
+      let timer;
+      let focusTimer;
+      let previousTarget;
+      function showStage(next) {
+        stage = (next + captions.length) % captions.length;
+        const data = captions[stage];
+        demoWindow.className = 'demo-window stage-step-' + (stage + 1);
+        designStage.className = 'design-stage stage-step-' + (stage + 1);
+        demoStatus.textContent = data.status;
+        demoCaption.textContent = data.caption;
+        stageHint.textContent = data.hint;
+        objectCount.textContent = data.count;
+        toolLabel.textContent = data.tool;
+        selectionTag.textContent = data.tag;
+        propName.textContent = data.name;
+        propSize.textContent = data.size;
+        propColor.textContent = data.color;
+        propAction.textContent = data.action;
+        cursorLabel.textContent = data.cursor;
+        colorSwatch.style.background = data.swatch;
+        actionNoteMark.textContent = noteMarks[stage];
+        actionNoteTitle.textContent = data.note;
+        actionNoteText.textContent = data.noteText;
+        demoProgress.forEach((dot, index) => dot.classList.toggle('active', index === stage));
+        if (previousTarget) previousTarget.classList.remove('demo-focus');
+        if (focusTimer) clearTimeout(focusTimer);
+        previousTarget = document.querySelector(focusTargets[stage]);
+        if (previousTarget) {
+          previousTarget.classList.add('demo-focus');
+          focusTimer = setTimeout(() => previousTarget && previousTarget.classList.remove('demo-focus'), 1350);
+        }
+      }
+      function startAnimation() {
+        if (timer) clearInterval(timer);
+        showStage(0);
+        timer = setInterval(() => showStage(stage + 1), 1900);
+      }
+      startAnimation();
+      document.querySelectorAll('a[href="#demo"]').forEach(link => {
+        link.addEventListener('click', () => {
+          startAnimation();
+          setTimeout(() => document.getElementById('demo').scrollIntoView({behavior:'smooth', block:'center'}), 30);
+        });
+      });
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduced && 'IntersectionObserver' in window) {
+        const observer = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('visible');
+              observer.unobserve(entry.target);
+            }
+          });
+        }, {threshold: .12});
+        document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+      } else {
+        document.querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+      }
+    })();
+  </script>
+</body>
+</html>

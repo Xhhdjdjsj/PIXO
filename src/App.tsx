@@ -50,10 +50,10 @@ import { namespaceSvgIds, serializeComposition } from './features/export/SvgExpo
 import { readWorkspaceValue, writeWorkspaceValue } from './features/storage/workspaceStorage'
 import type { SvgTreeNode } from './features/svg-import/SvgStructure'
 import './App.css'
-import serviceIconsSvg from '../public/icons.svg?raw'
+import serviceIconsSvg from './assets/icons.svg?raw'
 import reactLogoSvg from './assets/react.svg?raw'
 import viteLogoSvg from './assets/vite.svg?raw'
-import pixoMarkSvg from '../public/favicon.svg?raw'
+import pixoMarkSvg from './assets/favicon.svg?raw'
 
 type ThemeMode = 'system' | 'light' | 'dark'
 type IconTool = 'rectangle' | 'ellipse' | 'pen' | 'text'
@@ -650,15 +650,17 @@ function App() {
     if (resolvedTheme === 'light' && stored.toLowerCase() === '#101115') return '#ffffff'
     return stored
   })
-  const [language, setLanguage] = useState<'en' | 'ru'>(() => readStored('pixo-language', 'en'))
+  const [language, setLanguage] = useState<'en' | 'ru'>(() => readStored('pixo-language', 'ru'))
   const [exportName, setExportName] = useState('launch-day')
   const [transparentBackground, setTransparentBackground] = useState(true)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const [activeNav, setActiveNav] = useState('Projects')
+  const [showLanding, setShowLanding] = useState(true)
   const [showProjects, setShowProjects] = useState(false)
   const [activeTool, setActiveTool] = useState('Select')
   const [activeRailItem, setActiveRailItem] = useState<'Library' | 'Layers' | 'Files' | 'Assets' | null>('Library')
+  const [mobilePanel, setMobilePanel] = useState<'library' | 'inspector' | null>(null)
   const [libraryWidth, setLibraryWidth] = useState(250)
   const [importedFilesHeight, setImportedFilesHeight] = useState(132)
   const [inspectorWidth, setInspectorWidth] = useState(250)
@@ -669,6 +671,9 @@ function App() {
   const fileInput = useRef<HTMLInputElement>(null)
   const globalSearchRef = useRef<HTMLInputElement>(null)
   const appShellRef = useRef<HTMLElement>(null)
+  const landingFrameRef = useRef<HTMLIFrameElement>(null)
+  const openLastProjectFromLandingRef = useRef<() => void>(() => {})
+  const pendingLandingOpenRef = useRef(false)
   const accountMenuRef = useRef<HTMLDivElement>(null)
   const languageControlRef = useRef<HTMLDivElement>(null)
   const assetSortControlRef = useRef<HTMLDivElement>(null)
@@ -753,6 +758,10 @@ function App() {
       startTransition(() => setCanvasBackground(resolvedTheme === 'light' ? '#ffffff' : '#101115'))
     }
   }, [canvasBackground, resolvedTheme])
+
+  useEffect(() => {
+    landingFrameRef.current?.contentWindow?.postMessage({ type: 'pixo:theme', theme: resolvedTheme }, window.location.origin)
+  }, [resolvedTheme, showLanding])
 
   useEffect(() => {
     projectsRef.current = projects
@@ -1396,6 +1405,7 @@ function App() {
     setSelectedIds([separated?.group?.objectId ?? separated?.parts[0]?.objectId ?? next.objectId])
     setActiveTool('Select')
     setToast(separated ? `${asset.name} added as ${separated.parts.length} objects` : `${asset.name} added to canvas`)
+    if (window.matchMedia('(max-width: 680px)').matches) setMobilePanel(null)
     return next
   }
 
@@ -1771,6 +1781,7 @@ function App() {
     redoStack.current = []
     setCanUndo(false)
     setCanRedo(false)
+    setShowLanding(false)
     setShowProjects(false)
     setActiveNav('Projects')
   }
@@ -1797,10 +1808,46 @@ function App() {
     redoStack.current = []
     setCanUndo(false)
     setCanRedo(false)
+    setShowLanding(false)
     setShowProjects(false)
     setActiveNav('Projects')
     setToast('Project created')
   }
+
+  function openLastProjectFromLanding() {
+    if (!storageReady) {
+      pendingLandingOpenRef.current = true
+      return
+    }
+    const lastProject = projectsRef.current.find((project) => project.id === currentProjectId)
+      ?? projectsRef.current.reduce<Project | undefined>((latest, project) => (
+        !latest || project.updatedAt > latest.updatedAt ? project : latest
+      ), undefined)
+    if (lastProject) {
+      openProject(lastProject)
+      return
+    }
+    setShowLanding(false)
+    setShowProjects(true)
+    setActiveNav('Projects')
+  }
+  openLastProjectFromLandingRef.current = openLastProjectFromLanding
+
+  useEffect(() => {
+    if (!storageReady || !pendingLandingOpenRef.current) return
+    pendingLandingOpenRef.current = false
+    openLastProjectFromLandingRef.current()
+  }, [storageReady])
+
+  useEffect(() => {
+    function handleLandingMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin || event.source !== landingFrameRef.current?.contentWindow) return
+      if ((event.data as { type?: string } | null)?.type !== 'pixo:open-editor') return
+      openLastProjectFromLandingRef.current()
+    }
+    window.addEventListener('message', handleLandingMessage)
+    return () => window.removeEventListener('message', handleLandingMessage)
+  }, [])
 
   function deleteProject(project: Project) {
     const next = projectsRef.current.filter((item) => item.id !== project.id)
@@ -2136,19 +2183,19 @@ function App() {
   const viewBox = `${canvasCenter.x - canvasWidth / (2 * zoom)} ${canvasCenter.y - canvasHeight / (2 * zoom)} ${canvasWidth / zoom} ${canvasHeight / zoom}`
 
   return (
-    <main ref={appShellRef} className={`app-shell theme-${resolvedTheme}`} onDragEnter={(event) => { if (event.dataTransfer.types.includes('Files')) setFileDragActive(true) }} onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer.types.includes('Files')) setFileDragActive(true) }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setFileDragActive(false) }} onDrop={(event) => { event.preventDefault(); setFileDragActive(false); if (event.dataTransfer.files.length) void importFiles(event.dataTransfer.files) }}>
+    <main ref={appShellRef} className={`app-shell theme-${resolvedTheme} ${showLanding ? 'is-landing' : ''}`} onDragEnter={(event) => { if (event.dataTransfer.types.includes('Files')) setFileDragActive(true) }} onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer.types.includes('Files')) setFileDragActive(true) }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setFileDragActive(false) }} onDrop={(event) => { event.preventDefault(); setFileDragActive(false); if (event.dataTransfer.files.length) void importFiles(event.dataTransfer.files) }}>
       {fileDragActive && <div className="file-drop-overlay" role="status"><div><Download size={22} /><b>Drop files to import</b></div></div>}
       <input ref={fileInput} className="visually-hidden" type="file" accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp,image/gif,image/avif" multiple onChange={(event) => { if (event.target.files) void importFiles(event.target.files) }} />
-      <header className="topbar">
-        <button className="brand" aria-label="Pixo home" onClick={() => { persistActiveProject(); setActiveNav('Projects'); setShowProjects(true) }}><span className="brand-mark"><i /><i /><i /></span><span>Pixo</span></button>
+      {!showLanding && <header className="topbar">
+        <button className="brand" aria-label="Pixo home" onClick={() => { persistActiveProject(); setActiveNav('Projects'); setShowProjects(false); setShowLanding(true) }}><span className="brand-mark"><i /><i /><i /></span><span>Pixo</span></button>
         <div className="top-divider" />
-        <button className="top-project-switcher" onClick={() => { persistActiveProject(); setActiveNav('Projects'); setShowProjects(true) }}><FileImage size={15} /><span>{projectName}</span><ChevronDown size={13} /></button>
+        <button className="top-project-switcher" aria-label={language === 'ru' ? 'Показать мои проекты' : 'Show my projects'} onClick={() => { persistActiveProject(); setActiveNav('Projects'); setShowLanding(false); setShowProjects(true) }}><FileImage size={15} /><span>{projectName}</span><ChevronDown size={13} /></button>
         <nav className="global-nav" aria-label="Workspace">
           {[
             { name: 'Projects', icon: FolderOpen },
             { name: 'Components', icon: Shapes },
             { name: 'Assets', icon: FileImage },
-          ].map(({ name, icon: Icon }) => <button key={name} className={`nav-item ${activeNav === name ? 'active' : ''}`} onClick={() => { setActiveNav(name); if (name === 'Projects') { persistActiveProject(); setShowProjects(true) } else { setShowProjects(false); if (name === 'Components') setLibraryTab('Library'); if (name === 'Assets') setLibraryTab('Assets') } }}><Icon size={14} />{name}</button>)}
+          ].map(({ name, icon: Icon }) => <button key={name} className={`nav-item ${activeNav === name ? 'active' : ''}`} onClick={() => { setActiveNav(name); setShowLanding(false); if (name === 'Projects') { persistActiveProject(); setShowProjects(true) } else { setShowProjects(false); if (name === 'Components') setLibraryTab('Library'); if (name === 'Assets') setLibraryTab('Assets') } }}><Icon size={14} />{name}</button>)}
         </nav>
         <label className="global-search"><Search size={14} /><input ref={globalSearchRef} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects, components..." /></label>
         <div className="header-actions">
@@ -2164,28 +2211,37 @@ function App() {
             {profileMenuOpen && <div className="account-menu" role="menu"><div className="account-menu-heading"><strong>{profileName || 'Guest'}</strong><span>Local profile</span></div><button className="account-menu-action" role="menuitem" onClick={() => { setProfileMenuOpen(false); setShowSettings(true) }}><Settings2 size={14} />Settings</button><button className="account-menu-action signout-action" role="menuitem" onClick={() => { setProfileMenuOpen(false); setProfileName('Guest'); setToast('Signed out. Project remains saved locally.') }}><LogOut size={14} />Sign out</button><p className="account-note">Projects stay saved on this device.</p></div>}
           </div>
         </div>
-      </header>
+      </header>}
 
-      {showProjects ? <section className="projects-page">
-        <div className="projects-page-header"><div><span className="eyebrow">Pixo workspace</span><h1>Your workspace</h1><p>{translateRussian(`${projects.length} local project${projects.length === 1 ? '' : 's'}`, language)}</p></div><button className="button button-primary" onClick={createProject}><Plus size={14} />New project</button></div>
-        <div className="projects-toolbar"><span>Recent projects</span></div>
-        {filteredProjects.length ? <div className="project-grid">{filteredProjects.map((project) => <article className="project-card" key={project.id}><button className="project-open" onClick={() => openProject(project)}><ProjectCanvasPreview project={project} language={language} /><span className="project-card-info"><strong>{project.name}</strong><small>Edited {new Date(project.updatedAt).toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US')}</small></span></button><div className="project-card-actions"><button title="Download project JSON" aria-label={`Download ${project.name}`} onClick={() => exportProject(project)}><DownloadIcon /></button><button title="Delete project" aria-label={`Delete ${project.name}`} onClick={() => deleteProject(project)}><Trash2 size={13} /></button></div></article>)}</div> : <div className="projects-empty"><FolderOpen size={24} /><strong>{search ? 'No matching projects' : 'Your workspace is empty'}</strong><span>{search ? 'Try another search.' : 'Create a project to start composing.'}</span><button className="button button-primary" onClick={createProject}><Plus size={14} />New project</button></div>}
+      {showLanding ? <section className="landing-frame-shell"><iframe ref={landingFrameRef} title="Pixo — главная страница" src="/pixo-landing.html?v=motion-v4-mobile" onLoad={() => landingFrameRef.current?.contentWindow?.postMessage({ type: 'pixo:theme', theme: resolvedTheme }, window.location.origin)} /></section> : showProjects ? <section className="projects-page">
+        <div className="projects-page-header">
+          <div><span className="eyebrow">Pixo workspace</span><h1>{language === 'ru' ? 'Мои проекты' : 'My projects'}</h1><p>{language === 'ru' ? `Проектов: ${projects.length}` : `${projects.length} saved projects`}</p></div>
+          <button className="button button-primary" onClick={createProject}><Plus size={15} />{language === 'ru' ? 'Новый проект' : 'New project'}</button>
+        </div>
+        <div className="projects-toolbar"><span>{language === 'ru' ? 'Недавно открытые' : 'Recent projects'}</span><span>{filteredProjects.length} {language === 'ru' ? 'проектов' : 'projects'}</span></div>
+        {filteredProjects.length ? <div className="project-grid">{filteredProjects.map((project) => <article className="project-card" key={project.id}>
+          <button className="project-open" title={language === 'ru' ? 'Открыть проект' : 'Open project'} onClick={() => openProject(project)}>
+            <ProjectCanvasPreview project={project} language={language} />
+            <span className="project-card-info"><strong>{project.name}</strong><small>{new Date(project.updatedAt || project.createdAt).toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</small></span>
+          </button>
+          <div className="project-card-actions"><button title={language === 'ru' ? 'Скачать проект' : 'Download project JSON'} aria-label={language === 'ru' ? `Скачать проект ${project.name}` : `Download project ${project.name}`} onClick={() => exportProject(project)}><DownloadIcon /></button><button title={language === 'ru' ? 'Удалить проект' : 'Delete project'} aria-label={language === 'ru' ? `Удалить проект ${project.name}` : `Delete project ${project.name}`} onClick={() => deleteProject(project)}><Trash2 size={14} /></button></div>
+        </article>)}</div> : <div className="projects-empty"><FolderOpen size={25} /><strong>{search ? (language === 'ru' ? 'Ничего не найдено' : 'No projects found') : (language === 'ru' ? 'Пока нет проектов' : 'No projects yet')}</strong><span>{search ? (language === 'ru' ? 'Измени запрос и попробуй ещё раз.' : 'Try another search.') : (language === 'ru' ? 'Создай проект, чтобы начать работу.' : 'Create a project to get started.')}</span>{!search && <button className="button button-primary" onClick={createProject}><Plus size={15} />{language === 'ru' ? 'Создать проект' : 'Create project'}</button>}</div>}
       </section> : <div className="editor-layout" style={{ '--library-width': libraryCollapsed ? '0px' : `${libraryWidth}px`, '--inspector-width': inspectorCollapsed ? '0px' : `${inspectorWidth}px` } as React.CSSProperties}>
         <aside className="tool-rail" aria-label="Tools">
-          <button title="Library" aria-label="Library" aria-pressed={activeRailItem === 'Library'} className={`tool-button ${activeRailItem === 'Library' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Library'); setActiveNav('Components'); setActiveRailItem('Library') }}><Shapes size={17} /></button>
+          <button title="Library" aria-label="Library" aria-pressed={activeRailItem === 'Library'} className={`tool-button ${activeRailItem === 'Library' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Library'); setActiveNav('Components'); setActiveRailItem('Library'); setMobilePanel('library') }}><Shapes size={17} /></button>
           <button title="Rectangle" aria-label="Rectangle" aria-pressed={activeTool === 'Rectangle'} className={`tool-button ${activeTool === 'Rectangle' ? 'selected' : ''}`} onClick={() => setActiveTool('Rectangle')}><Square size={17} /></button>
           <button title="Ellipse" aria-label="Ellipse" aria-pressed={activeTool === 'Ellipse'} className={`tool-button ${activeTool === 'Ellipse' ? 'selected' : ''}`} onClick={() => setActiveTool('Ellipse')}><Circle size={17} /></button>
           <button title="Pen" aria-label="Pen" aria-pressed={activeTool === 'Pen'} className={`tool-button ${activeTool === 'Pen' ? 'selected' : ''}`} onClick={() => setActiveTool('Pen')}><Pencil size={17} /></button>
           <button title="Text" aria-label="Text" aria-pressed={activeTool === 'Text'} className={`tool-button ${activeTool === 'Text' ? 'selected' : ''}`} onClick={() => setActiveTool('Text')}><Type size={17} /></button>
-          <button title="Layers" aria-label="Layers" aria-pressed={activeRailItem === 'Layers'} className={`tool-button ${activeRailItem === 'Layers' ? 'selected' : ''}`} onClick={() => { setInspectorTab('Layers'); setActiveTool('Layers'); setActiveRailItem('Layers') }}><Layers size={17} /></button>
-          <button title="Files" aria-label="Files" aria-pressed={activeRailItem === 'Files'} className={`tool-button ${activeRailItem === 'Files' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Files'); setActiveRailItem('Files') }}><FileImage size={17} /></button>
-          <button title="Assets" aria-label="Assets" aria-pressed={activeRailItem === 'Assets'} className={`tool-button ${activeRailItem === 'Assets' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Assets'); setActiveNav('Assets'); setActiveRailItem('Assets') }}><Grid2X2 size={17} /></button>
+          <button title="Layers" aria-label="Layers" aria-pressed={activeRailItem === 'Layers'} className={`tool-button ${activeRailItem === 'Layers' ? 'selected' : ''}`} onClick={() => { setInspectorTab('Layers'); setActiveTool('Layers'); setActiveRailItem('Layers'); setMobilePanel('inspector') }}><Layers size={17} /></button>
+          <button title="Files" aria-label="Files" aria-pressed={activeRailItem === 'Files'} className={`tool-button ${activeRailItem === 'Files' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Files'); setActiveRailItem('Files'); setMobilePanel('library') }}><FileImage size={17} /></button>
+          <button title="Assets" aria-label="Assets" aria-pressed={activeRailItem === 'Assets'} className={`tool-button ${activeRailItem === 'Assets' ? 'selected' : ''}`} onClick={() => { setShowProjects(false); setLibraryTab('Assets'); setActiveNav('Assets'); setActiveRailItem('Assets'); setMobilePanel('library') }}><Grid2X2 size={17} /></button>
           <div className="rail-spacer" />
           <button className="tool-button" title="Help" aria-label="Help" onClick={() => setShowHelp(true)}><CircleHelp size={17} /></button>
           <button className="tool-button" title="Settings" aria-label="Settings" onClick={() => setShowSettings(true)}><Settings2 size={17} /></button>
         </aside>
 
-        <aside className={`library-panel panel ${libraryCollapsed ? 'is-collapsed' : ''}`} style={{ '--imported-files-height': `${importedFilesHeight}px` } as React.CSSProperties}>
+        <aside className={`library-panel panel ${libraryCollapsed ? 'is-collapsed' : ''} ${mobilePanel === 'library' ? 'mobile-open' : ''}`} style={{ '--imported-files-height': `${importedFilesHeight}px` } as React.CSSProperties}>
           <div className="panel-tabs">
             {['Library', 'Files', 'Assets'].map((tab) => <button key={tab} className={libraryTab === tab ? 'active' : ''} onClick={() => setLibraryTab(tab)}>{tab}</button>)}
           </div>
@@ -2262,7 +2318,7 @@ function App() {
           {inspectorCollapsed && <button className="restore-panel" title="Show inspector" aria-label="Show inspector" onClick={() => setInspectorCollapsed(false)}><ChevronLeft size={14} /></button>}
         </div>
 
-        <aside className={`inspector-panel panel ${inspectorCollapsed ? 'is-collapsed' : ''}`}>
+        <aside className={`inspector-panel panel ${inspectorCollapsed ? 'is-collapsed' : ''} ${mobilePanel === 'inspector' ? 'mobile-open' : ''}`}>
           <div className="panel-tabs inspector-tabs"><button className={inspectorTab === 'Inspector' ? 'active' : ''} onClick={() => setInspectorTab('Inspector')}>Properties</button><button className={inspectorTab === 'Layers' ? 'active' : ''} onClick={() => setInspectorTab('Layers')}>Layers</button><button className="panel-collapse" title="Collapse properties" aria-label="Collapse properties" onClick={() => setInspectorCollapsed(true)}><ChevronRight size={13} /></button></div>
           {inspectorTab === 'Inspector' ? <div className="inspector-content">
             <InspectorSection title="Document"><ChevronRight size={13} /><div className="field-grid"><NumericField label="W" value={canvasWidth} onChange={(value) => updateCanvasDimension('width', value)} /><NumericField label="H" value={canvasHeight} onChange={(value) => updateCanvasDimension('height', value)} /></div><ColorPicker label="Background" value={canvasBackground} onChangeStart={() => undefined} onChange={(color) => { setCanvasBackground(colorToHex(parseColor(color))); setSaved(false) }} onChangeEnd={() => undefined} /></InspectorSection>
@@ -2299,6 +2355,12 @@ function App() {
           </div>}
           <div className="inspector-footer"><span>Local project</span><span className="save-state"><i />{saved ? 'Synced' : 'Saving'}</span></div>
         </aside>
+        {mobilePanel && <button className="mobile-panel-backdrop" aria-label={language === 'ru' ? 'Закрыть панель' : 'Close panel'} onClick={() => setMobilePanel(null)} />}
+        <nav className="mobile-panel-tabs" aria-label={language === 'ru' ? 'Панели редактора' : 'Editor panels'}>
+          <button className={mobilePanel === 'library' ? 'active' : ''} aria-pressed={mobilePanel === 'library'} onClick={() => { setLibraryTab('Library'); setActiveRailItem('Library'); setMobilePanel((panel) => panel === 'library' ? null : 'library') }}><Shapes size={15} />{language === 'ru' ? 'Библиотека' : 'Library'}</button>
+          <button className={!mobilePanel ? 'active' : ''} aria-pressed={!mobilePanel} onClick={() => setMobilePanel(null)}><MousePointer2 size={15} />{language === 'ru' ? 'Холст' : 'Canvas'}</button>
+          <button className={mobilePanel === 'inspector' ? 'active' : ''} aria-pressed={mobilePanel === 'inspector'} onClick={() => { setInspectorTab('Inspector'); setMobilePanel((panel) => panel === 'inspector' ? null : 'inspector') }}><Settings2 size={15} />{language === 'ru' ? 'Свойства' : 'Properties'}</button>
+        </nav>
       </div>}
 
       {contextMenu && <><button className="menu-dismiss" aria-label="Close context menu" onClick={() => setContextMenu(null)} /><div className="context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 236), top: Math.min(contextMenu.y, window.innerHeight - 475) }}>
