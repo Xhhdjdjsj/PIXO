@@ -44,4 +44,5 @@ export interface DragState {
   snapshots?: Array<Pick<CanvasObject, 'objectId' | 'x' | 'y' | 'width' | 'height'>>
   bounds?: { x: number; y: number; width: number; height: number }
   moved?: boolean
+  selectOnClick?: string
 }

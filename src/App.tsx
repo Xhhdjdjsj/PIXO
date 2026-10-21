@@ -214,6 +214,17 @@ function getObjectBounds(items: Pick<CanvasObject, 'x' | 'y' | 'width' | 'height
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
+function isCanvasPointInsideObject(point: IconPoint, item: CanvasObject) {
+  const centerX = item.x + item.width / 2
+  const centerY = item.y + item.height / 2
+  const angle = -(item.rotation * Math.PI) / 180
+  const dx = point.x - centerX
+  const dy = point.y - centerY
+  const localX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle)
+  const localY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle)
+  return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
+}
+
 function getCanvasBackgroundForTheme(background: string | undefined, theme: 'light' | 'dark') {
   const color = background ?? (theme === 'light' ? '#ffffff' : '#101115')
   if (theme === 'dark' && color.toLowerCase() === '#ffffff') return '#101115'
@@ -809,9 +820,16 @@ function App() {
           return serviceAsset ? { ...asset, name: serviceAsset.name, markup: serviceAsset.markup } : asset
         })
       const nextActiveId = storedActiveId ?? legacyActiveId
-      const normalizeObjects = (items: CanvasObject[]) => putFrameHitTargetsBehindContents(
-        fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(keepSourceObjects(items, nextAssets), nextAssets), nextAssets)),
-      )
+      const normalizeObjects = (items: CanvasObject[]) => {
+        const sourceObjects = keepSourceObjects(items, nextAssets).flatMap((item) => {
+          if (item.isFrame || item.frameId || (!item.imported && !item.sourceFileId) || getAssetFileType(item.source) !== 'SVG') return [item]
+          const separated = buildSvgGroupParts(item)
+          return separated?.parts.length ? [...(separated.group ? [separated.group] : []), ...separated.parts] : [item]
+        })
+        return putFrameHitTargetsBehindContents(
+          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(sourceObjects, nextAssets), nextAssets)),
+        )
+      }
       const nextObjects = normalizeObjects(storedObjects ?? legacyObjects)
       const nextProjects = (storedProjects ?? legacyProjects).map((project) => ({
         ...project,
@@ -1097,6 +1115,8 @@ function App() {
       })
     }
     const onPointerUp = () => {
+      const drag = dragRef.current
+      if (drag && !drag.moved && drag.selectOnClick) setSelectedIds([drag.selectOnClick])
       dragRef.current = null
       selectionDragRef.current = null
       panelResizeRef.current = null
@@ -1363,11 +1383,17 @@ function App() {
   function buildSvgGroupParts(root: CanvasObject, granularity: 'logical' | 'primitive' = 'logical'): { group?: CanvasObject; parts: CanvasObject[] } | null {
     const renderableTags = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image', 'use'])
     const structure = getSvgStructure(root.markup)
+    const isLogicalNode = (node: SvgTreeNode) => renderableTags.has(node.tag)
+      || (node.tag === 'g' || node.tag === 'symbol') && flattenSvgTree(node.children).some(({ node: child }) => renderableTags.has(child.tag))
+    let logicalNodes = structure.filter(isLogicalNode).map((node) => ({ node, depth: 0 }))
+    while (logicalNodes.length === 1 && (logicalNodes[0].node.tag === 'g' || logicalNodes[0].node.tag === 'symbol')) {
+      const children = logicalNodes[0].node.children.filter(isLogicalNode).map((node) => ({ node, depth: 1 }))
+      if (!children.length) break
+      logicalNodes = children
+    }
     const nodes = (granularity === 'primitive'
       ? flattenSvgTree(structure).filter(({ node }) => node.children.length === 0 && renderableTags.has(node.tag))
-      : structure.map((node) => ({ node, depth: 0 })).filter(({ node }) => renderableTags.has(node.tag)
-        || (node.tag === 'g' || node.tag === 'symbol') && flattenSvgTree(node.children).some(({ node: child }) => renderableTags.has(child.tag))))
-      .slice(0, 200)
+      : logicalNodes).slice(0, 200)
     if (nodes.length < 2) return null
     const values = root.viewBox.trim().split(/[\s,]+/).map(Number)
     const [viewX, viewY, viewWidth, viewHeight] = values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0
@@ -1669,17 +1695,10 @@ function App() {
     const clickedHandle = event.target instanceof Element && event.target.closest('.resize-handle')
     if (activeTool === 'Select' && event.button === 0 && !clickedObject && !clickedHandle) {
       const point = canvasPoint(event.clientX, event.clientY)
-      const hitObject = [...objects].reverse().find((item) => {
+      const hitObject = [...objects].reverse().filter((item) => {
         if (item.isFrame || isObjectEffectivelyLocked(objects, item) || !isObjectEffectivelyVisible(objects, item)) return false
-        const centerX = item.x + item.width / 2
-        const centerY = item.y + item.height / 2
-        const angle = -(item.rotation * Math.PI) / 180
-        const dx = point.x - centerX
-        const dy = point.y - centerY
-        const localX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle)
-        const localY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle)
-        return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
-      })
+        return isCanvasPointInsideObject(point, item)
+      }).sort((left, right) => Math.abs(left.width * left.height) - Math.abs(right.width * right.height))[0]
       if (hitObject) {
         startDrag(event, hitObject)
         return
@@ -1949,18 +1968,40 @@ function App() {
   }
 
   function startDrag(event: React.PointerEvent<SVGElement>, item: CanvasObject, mode: DragState['mode'] = 'move', handle?: string) {
-    const frameAncestors = getFrameAncestors(objects, item)
+    let dragItem = item
+    let selectOnClick: string | undefined
+    if (!event.altKey && mode === 'move' && !selectedIds.includes(item.objectId)) {
+      const point = canvasPoint(event.clientX, event.clientY)
+      const selectedUnderPointer = [...objects].reverse().find((candidate) => selectedIds.includes(candidate.objectId)
+        && candidate.objectId !== item.objectId
+        && !candidate.isFrame
+        && !isObjectEffectivelyLocked(objects, candidate)
+        && isObjectEffectivelyVisible(objects, candidate)
+        && isCanvasPointInsideObject(point, candidate))
+      if (selectedUnderPointer) {
+        dragItem = selectedUnderPointer
+        selectOnClick = item.objectId
+      }
+    }
+    if (event.altKey && mode === 'move') {
+      const point = canvasPoint(event.clientX, event.clientY)
+      const overlapStack = [...objects].reverse().filter((candidate) => !candidate.isFrame
+        && !isObjectEffectivelyLocked(objects, candidate)
+        && isObjectEffectivelyVisible(objects, candidate)
+        && isCanvasPointInsideObject(point, candidate))
+      const currentIndex = overlapStack.findIndex((candidate) => candidate.objectId === item.objectId)
+      dragItem = overlapStack[currentIndex + 1] ?? (currentIndex === -1 ? overlapStack[0] : undefined) ?? item
+    }
+    const frameAncestors = getFrameAncestors(objects, dragItem)
     const moveIndividual = event.altKey && mode === 'move'
-    const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId))
-    const groupAncestor = moveIndividual || mode !== 'move' ? undefined : frameAncestors.find((ancestor) => ancestor.isGroup)
-    const dragFrameAncestor = selectedFrameAncestor ?? groupAncestor
-    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, item)) return
+    const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId) && !ancestor.isGroup)
+    const dragFrameAncestor = selectedFrameAncestor
+    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
     event.stopPropagation()
-    const clickedSelection = selectedIds.includes(item.objectId) || Boolean(dragFrameAncestor)
-    if (!event.shiftKey && !clickedSelection) setSelectedIds([item.objectId])
-    if (!event.shiftKey && groupAncestor && !selectedFrameAncestor) setSelectedIds([groupAncestor.objectId])
+    const clickedSelection = selectedIds.includes(dragItem.objectId) || Boolean(dragFrameAncestor)
+    if (!event.shiftKey && !clickedSelection) setSelectedIds([dragItem.objectId])
     if (event.shiftKey) {
-      setSelectedIds((ids) => ids.includes(item.objectId) ? ids.filter((id) => id !== item.objectId) : [...ids, item.objectId])
+      setSelectedIds((ids) => ids.includes(dragItem.objectId) ? ids.filter((id) => id !== dragItem.objectId) : [...ids, dragItem.objectId])
       return
     }
     const point = canvasRef.current?.createSVGPoint()
@@ -1968,10 +2009,10 @@ function App() {
     point.x = event.clientX
     point.y = event.clientY
     const local = point.matrixTransform(canvasRef.current.getScreenCTM()?.inverse())
-    // Group members select and drag their nearest group unless Alt is held.
+    // A click on a group child selects that child; selected frame containers still drag as a unit.
     const movingSelection = dragFrameAncestor
       ? [dragFrameAncestor]
-      : clickedSelection ? selected : [item]
+      : clickedSelection ? selected : [dragItem]
     const dragItems = movingSelection.flatMap((selectedItem) => selectedItem.isFrame
       ? [selectedItem, ...getFrameDescendants(objects, selectedItem.objectId)]
       : [selectedItem])
@@ -1982,8 +2023,9 @@ function App() {
       : dragItems
     const bounds = getObjectBounds(boundsItems) ?? getObjectBounds(dragItems) ?? undefined
     dragRef.current = {
-      id: item.objectId, mode, handle, startX: local.x, startY: local.y,
-      x: item.x, y: item.y, width: item.width, height: item.height,
+      id: dragItem.objectId, mode, handle, startX: local.x, startY: local.y,
+      x: dragItem.x, y: dragItem.y, width: dragItem.width, height: dragItem.height,
+      selectOnClick,
       objectIds: dragItems.map((selectedItem) => selectedItem.objectId),
       snapshots: dragItems.map(({ objectId, x, y, width, height }) => ({ objectId, x, y, width, height })),
       bounds,
