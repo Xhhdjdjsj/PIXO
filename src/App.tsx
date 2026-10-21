@@ -226,6 +226,7 @@ function isCanvasPointInsideObject(point: IconPoint, item: CanvasObject) {
   return localX >= item.x && localX <= item.x + item.width && localY >= item.y && localY <= item.y + item.height
 }
 
+<<<<<<< HEAD
 function clipSegmentToRect(start: IconPoint, end: IconPoint, minX: number, minY: number, maxX: number, maxY: number) {
   const dx = end.x - start.x
   const dy = end.y - start.y
@@ -366,6 +367,8 @@ async function fitSvgObjectToVisibleArtwork(item: CanvasObject, backgroundColor 
   }
 }
 
+=======
+>>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
 function getCanvasBackgroundForTheme(background: string | undefined, theme: 'light' | 'dark') {
   const color = background ?? (theme === 'light' ? '#ffffff' : '#101115')
   if (theme === 'dark' && color.toLowerCase() === '#ffffff') return '#101115'
@@ -1000,6 +1003,7 @@ function App() {
           return serviceAsset ? { ...asset, name: serviceAsset.name, markup: serviceAsset.markup } : asset
         })
       const nextActiveId = storedActiveId ?? legacyActiveId
+<<<<<<< HEAD
       const projectSource = storedProjects ?? legacyProjects
       const backgroundForProject = (project?: Project) => getCanvasBackgroundForTheme(
         project?.backgroundColor ?? (project ? undefined : canvasBackground),
@@ -1029,6 +1033,20 @@ function App() {
       const activeProjectData = projectSource.find((project) => project.id === nextActiveId)
       const nextObjects = await normalizeObjects(storedObjects ?? legacyObjects, backgroundForProject(activeProjectData))
       const nextProjects = await Promise.all(projectSource.map(async (project) => ({
+=======
+      const normalizeObjects = (items: CanvasObject[]) => {
+        const sourceObjects = keepSourceObjects(items, nextAssets).flatMap((item) => {
+          if (item.isFrame || item.frameId || (!item.imported && !item.sourceFileId) || getAssetFileType(item.source) !== 'SVG') return [item]
+          const separated = buildSvgGroupParts(item)
+          return separated?.parts.length ? [...(separated.group ? [separated.group] : []), ...separated.parts] : [item]
+        })
+        return putFrameHitTargetsBehindContents(
+          fitFrameBounds(regroupImportedSvgParts(flattenImportedRootFrames(sourceObjects, nextAssets), nextAssets)),
+        )
+      }
+      const nextObjects = normalizeObjects(storedObjects ?? legacyObjects)
+      const nextProjects = (storedProjects ?? legacyProjects).map((project) => ({
+>>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
         ...project,
         objects: project.id === nextActiveId ? nextObjects : await normalizeObjects(project.objects ?? [], backgroundForProject(project)),
       })))
@@ -2423,9 +2441,19 @@ function App() {
       const currentIndex = overlapStack.findIndex((candidate) => candidate.objectId === item.objectId)
       dragItem = overlapStack[currentIndex + 1] ?? (currentIndex === -1 ? overlapStack[0] : undefined) ?? item
     }
+<<<<<<< HEAD
     if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
     event.stopPropagation()
     const clickedSelection = selectedIds.includes(dragItem.objectId)
+=======
+    const frameAncestors = getFrameAncestors(objects, dragItem)
+    const moveIndividual = event.altKey && mode === 'move'
+    const selectedFrameAncestor = moveIndividual ? undefined : frameAncestors.find((ancestor) => selectedIds.includes(ancestor.objectId) && !ancestor.isGroup)
+    const dragFrameAncestor = selectedFrameAncestor
+    if ((activeTool !== 'Select' && activeTool !== 'Pan') || event.button !== 0 || isObjectEffectivelyLocked(objects, dragItem)) return
+    event.stopPropagation()
+    const clickedSelection = selectedIds.includes(dragItem.objectId) || Boolean(dragFrameAncestor)
+>>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
     if (!event.shiftKey && !clickedSelection) setSelectedIds([dragItem.objectId])
     if (event.shiftKey) {
       setSelectedIds((ids) => ids.includes(dragItem.objectId) ? ids.filter((id) => id !== dragItem.objectId) : [...ids, dragItem.objectId])
@@ -2436,9 +2464,16 @@ function App() {
     point.x = event.clientX
     point.y = event.clientY
     const local = point.matrixTransform(canvasRef.current.getScreenCTM()?.inverse())
+<<<<<<< HEAD
     // Drag the actual child hit by the pointer, even when its parent frame is selected.
     // The frame itself still moves as a unit when its empty area is dragged.
     const movingSelection = clickedSelection ? selected : [dragItem]
+=======
+    // A click on a group child selects that child; selected frame containers still drag as a unit.
+    const movingSelection = dragFrameAncestor
+      ? [dragFrameAncestor]
+      : clickedSelection ? selected : [dragItem]
+>>>>>>> 566355bc4e7fe86750fa05bd30e3742b081aa47c
     const dragItems = movingSelection.flatMap((selectedItem) => selectedItem.isFrame
       ? [selectedItem, ...getFrameDescendants(objects, selectedItem.objectId)]
       : [selectedItem])
